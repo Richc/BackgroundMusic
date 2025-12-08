@@ -240,7 +240,7 @@ final class MIDIService: ObservableObject {
                 if mapping.channel == nil || mapping.channel == pb.channel.uInt8Value {
                     matched = true
                     // Pitch bend is 14-bit, convert to 0-1
-                    value = Float(pb.value.uInt14Value) / 16383.0
+                    value = Float(pb.value.bipolarUnitIntervalValue + 1.0) / 2.0
                 }
                 
             default:
@@ -281,7 +281,7 @@ final class MIDIService: ObservableObject {
         case .noteOff(let note):
             lastReceivedMessage = "Note Off \(note.note.number) [Ch \(note.channel.uInt8Value + 1)] from \(sourceName)"
         case .pitchBend(let pb):
-            lastReceivedMessage = "Pitch Bend \(pb.value.uInt14Value) [Ch \(pb.channel.uInt8Value + 1)] from \(sourceName)"
+            lastReceivedMessage = "Pitch Bend \(pb.value.midi1Value) [Ch \(pb.channel.uInt8Value + 1)] from \(sourceName)"
         default:
             break
         }

@@ -8,6 +8,7 @@
 import Foundation
 import CoreAudio
 import Combine
+import AppKit
 
 /// Main audio engine that manages all audio channels and device communication
 @MainActor

@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:BackgroundMusic}/Manatee",
+            "name": "Debug Manatee (Manatee)",
+            "target": "Manatee",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Manatee (Manatee)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:BackgroundMusic}/Manatee",
+            "name": "Release Manatee (Manatee)",
+            "target": "Manatee",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Manatee (Manatee)"
+        }
+    ]
+}

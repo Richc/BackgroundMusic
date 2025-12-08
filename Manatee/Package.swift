@@ -39,9 +39,6 @@ let package = Package(
             exclude: ["Info.plist", "Manatee.entitlements"],
             resources: [
                 .process("Resources")
-            ],
-            swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency")
             ]
         ),
         

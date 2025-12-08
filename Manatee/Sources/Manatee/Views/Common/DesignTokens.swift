@@ -92,9 +92,15 @@ enum ManateeColors {
     
     // MARK: - Helper Functions
     
+    /// Convert linear amplitude to decibels
+    private static func linearToDecibels(_ linear: Float) -> Float {
+        if linear <= 0 { return -Float.infinity }
+        return 20.0 * log10(linear)
+    }
+    
     /// Get meter color for a given level (0.0 to 1.0+)
     static func meterColor(for level: Float) -> Color {
-        let db = AudioChannel.linearToDecibels(level)
+        let db = linearToDecibels(level)
         
         if db > 0 {
             return meterClip

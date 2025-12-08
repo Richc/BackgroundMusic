@@ -243,15 +243,15 @@ struct MIDIPreferencesView: View {
             
             PreferencesSectionHeader(title: "Connected Devices")
             
-            if midiService.connectedDevices.isEmpty {
+            if midiService.inputDevices.isEmpty {
                 Text("No MIDI devices connected")
                     .foregroundColor(.secondary)
                     .padding()
             } else {
-                List(midiService.connectedDevices, id: \.self) { device in
+                List(midiService.inputDevices, id: \.displayName) { device in
                     HStack {
                         Image(systemName: "pianokeys")
-                        Text(device)
+                        Text(device.displayName)
                         Spacer()
                         Circle()
                             .fill(Color.green)

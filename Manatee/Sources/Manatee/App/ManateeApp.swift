@@ -14,19 +14,21 @@ struct ManateeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     var body: some Scene {
-        // Settings window
-        Settings {
-            PreferencesView()
-        }
-        
         // Mixer window (can be opened from menu bar)
-        Window("Manatee Mixer", id: "mixer") {
+        WindowGroup("Manatee Mixer", id: "mixer") {
             MixerView()
                 .environmentObject(appDelegate.audioEngine)
                 .environmentObject(appDelegate.midiService)
         }
-        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1200, height: 600)
+        
+        // Settings window
+        Settings {
+            PreferencesView()
+                .environmentObject(appDelegate.audioEngine)
+                .environmentObject(appDelegate.midiService)
+                .environmentObject(appDelegate.oscService)
+        }
         
         // Menu bar item
         MenuBarExtra {
@@ -40,6 +42,7 @@ struct ManateeApp: App {
 }
 
 // MARK: - App Delegate
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     
     // Core services
@@ -47,39 +50,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let midiService = MIDIService()
     let oscService = OSCService()
     
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        print("🐋 Manatee v1.0.0 starting...")
-        
-        // Initialize audio engine
-        Task {
+    nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
+        Task { @MainActor in
+            print("🐋 Manatee v1.0.0 starting...")
+            
+            // Initialize audio engine
             await audioEngine.initialize()
-        }
-        
-        // Initialize MIDI
-        Task {
+            
+            // Initialize MIDI
             await midiService.start()
-        }
-        
-        // Initialize OSC server
-        Task {
+            
+            // Initialize OSC server
             await oscService.start(port: 9000)
+            
+            print("✅ Manatee initialized")
         }
-        
-        print("✅ Manatee initialized")
     }
     
-    func applicationWillTerminate(_ notification: Notification) {
-        print("🐋 Manatee shutting down...")
-        
-        // Cleanup
-        Task {
+    nonisolated func applicationWillTerminate(_ notification: Notification) {
+        Task { @MainActor in
+            print("🐋 Manatee shutting down...")
+            
+            // Cleanup
             await audioEngine.shutdown()
             await midiService.stop()
             await oscService.stop()
         }
     }
     
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+    nonisolated func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // Keep running in menu bar
         return false
     }

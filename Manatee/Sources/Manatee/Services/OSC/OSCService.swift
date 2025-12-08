@@ -31,8 +31,8 @@ final class OSCService: ObservableObject {
     
     // MARK: - Private
     
-    private var server: OSCServer?
-    private var client: OSCClient?
+    private var server: OSCUDPServer?
+    private var client: OSCUDPClient?
     
     /// Callback when a control value changes
     var onControlChange: ((ControlTarget, Float) -> Void)?
@@ -71,7 +71,7 @@ final class OSCService: ObservableObject {
         print("📡 OSCService starting on port \(port)...")
         
         do {
-            server = OSCServer(port: port) { [weak self] message, timeTag in
+            server = OSCUDPServer(port: port) { [weak self] message, timeTag, host, port in
                 Task { @MainActor in
                     self?.handleMessage(message)
                 }
@@ -80,7 +80,7 @@ final class OSCService: ObservableObject {
             try server?.start()
             
             // Create client for sending feedback
-            client = OSCClient()
+            client = OSCUDPClient()
             
             isRunning = true
             errorMessage = nil
@@ -116,7 +116,7 @@ final class OSCService: ObservableObject {
     private func handleMessage(_ message: OSCMessage) {
         lastReceivedMessage = "\(message.addressPattern) \(message.values)"
         
-        let components = message.addressPattern.pathComponents
+        let components = message.addressPattern.pathComponents.map { String($0) }
         guard components.count >= 3,
               components[0] == "",
               components[1] == "manatee" else {

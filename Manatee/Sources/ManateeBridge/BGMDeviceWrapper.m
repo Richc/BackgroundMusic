@@ -8,6 +8,7 @@
 #import "Manatee-Bridging-Header.h"
 #import <Foundation/Foundation.h>
 #import <CoreAudio/CoreAudio.h>
+#import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 
 // Constants

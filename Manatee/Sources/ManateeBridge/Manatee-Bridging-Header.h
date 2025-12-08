@@ -16,8 +16,17 @@
 
 // MARK: - Forward Declarations
 
-// BGM Types from SharedSource
-#include "BGM_Types.h"
+// Note: BGM_Types.h will be included when integrating with the driver
+// For standalone builds, we define minimal types here
+
+// App volume data structure
+typedef struct {
+    CFStringRef mBundleID;
+    pid_t mProcessID;
+    Float32 mVolume;
+    Float32 mPan;
+    SInt32 mMuted;  // 0 = not muted, nonzero = muted
+} BGMAppVolumeData;
 
 // MARK: - Objective-C Wrapper Interface
 

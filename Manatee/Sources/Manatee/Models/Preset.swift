@@ -50,8 +50,9 @@ struct Preset: Identifiable, Codable {
     }
 }
 
-/// A scene is a lightweight version of a preset for quick switching
-struct Scene: Identifiable, Codable {
+/// A mixer scene is a lightweight version of a preset for quick switching
+/// Note: Named MixerScene to avoid conflict with SwiftUI.Scene protocol
+struct MixerScene: Identifiable, Codable {
     let id: UUID
     var name: String
     var index: Int
@@ -81,9 +82,9 @@ struct Scene: Identifiable, Codable {
 final class PresetStore: ObservableObject {
     
     @Published var presets: [Preset] = []
-    @Published var scenes: [Scene] = []
+    @Published var scenes: [MixerScene] = []
     @Published var currentPreset: Preset?
-    @Published var currentScene: Scene?
+    @Published var currentScene: MixerScene?
     
     private let presetsURL: URL
     private let scenesURL: URL
@@ -142,7 +143,7 @@ final class PresetStore: ObservableObject {
     
     // MARK: - Scenes
     
-    func saveScene(_ scene: Scene) {
+    func saveScene(_ scene: MixerScene) {
         if let index = scenes.firstIndex(where: { $0.id == scene.id }) {
             scenes[index] = scene
         } else {
@@ -151,12 +152,12 @@ final class PresetStore: ObservableObject {
         persistScenes()
     }
     
-    func deleteScene(_ scene: Scene) {
+    func deleteScene(_ scene: MixerScene) {
         scenes.removeAll { $0.id == scene.id }
         persistScenes()
     }
     
-    func recallScene(_ scene: Scene, to audioEngine: AudioEngine) async {
+    func recallScene(_ scene: MixerScene, to audioEngine: AudioEngine) async {
         currentScene = scene
         
         for state in scene.channelStates {
@@ -211,7 +212,7 @@ final class PresetStore: ObservableObject {
         
         do {
             let data = try Data(contentsOf: scenesURL)
-            scenes = try JSONDecoder().decode([Scene].self, from: data)
+            scenes = try JSONDecoder().decode([MixerScene].self, from: data)
         } catch {
             print("Failed to load scenes: \(error)")
         }
