@@ -163,9 +163,9 @@ private:
     static pthread_once_t       sStaticInitializer;
     static BGM_NullDevice*      sInstance;
 
-    #define kNullDeviceName     "Background Music Null Device"
+    #define kNullDeviceName     "Manatee Null Device"
     #define kNullDeviceManufacturerName \
-                                "Background Music contributors"
+                                "Manatee Audio"
 
     CAMutex                     mStateMutex;
     CAMutex                     mIOMutex;

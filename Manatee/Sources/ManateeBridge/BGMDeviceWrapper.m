@@ -114,7 +114,7 @@ static BGMDeviceWrapper *sharedInstance = nil;
             // Check for BGMDevice or Manatee device UID
             if ([uid containsString:@"BGMDevice"] || 
                 [uid containsString:@"ManateeDevice"] ||
-                [uid containsString:@"Background Music"]) {
+                [uid containsString:@"Manatee"]) {
                 self.deviceID = devices[i];
                 NSLog(@"[Manatee] Connected to virtual device: %@ (ID: %u)", uid, devices[i]);
                 free(devices);

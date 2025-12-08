@@ -45,12 +45,12 @@ static const char* const kBGMContributorsURL = "https://github.com/kyleneideck/B
 #define kBGMAppBundleID              "com.bearisdriving.BGM.App"
 #define kBGMXPCHelperBundleID        "com.bearisdriving.BGM.XPCHelper"
 
-#define kBGMDeviceUID                "BGMDevice"
-#define kBGMDeviceModelUID           "BGMDeviceModelUID"
-#define kBGMDeviceUID_UISounds       "BGMDevice_UISounds"
-#define kBGMDeviceModelUID_UISounds  "BGMDeviceModelUID_UISounds"
-#define kBGMNullDeviceUID            "BGMNullDevice"
-#define kBGMNullDeviceModelUID       "BGMNullDeviceModelUID"
+#define kBGMDeviceUID                "ManateeDevice"
+#define kBGMDeviceModelUID           "ManateeDeviceModelUID"
+#define kBGMDeviceUID_UISounds       "ManateeDevice_UISounds"
+#define kBGMDeviceModelUID_UISounds  "ManateeDeviceModelUID_UISounds"
+#define kBGMNullDeviceUID            "ManateeNullDevice"
+#define kBGMNullDeviceModelUID       "ManateeNullDeviceModelUID"
 
 // The object IDs for the audio objects this driver implements.
 //

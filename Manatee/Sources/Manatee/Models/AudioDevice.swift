@@ -149,7 +149,7 @@ extension AudioDevice {
                 outputChannelCount: outputChannels,
                 sampleRate: getSampleRate(deviceID: deviceID),
                 isDefault: isDefault,
-                isVirtual: manufacturer.contains("Background Music") || 
+                isVirtual: manufacturer.contains("Manatee") || 
                           manufacturer.contains("Manatee") ||
                           name.contains("Virtual")
             )

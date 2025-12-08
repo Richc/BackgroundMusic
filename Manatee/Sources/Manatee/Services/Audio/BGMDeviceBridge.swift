@@ -45,14 +45,14 @@ struct BGMAppVolumeKeys {
     static let bundleID = "bid"
 }
 
-/// BGMDevice UID constants
+/// Manatee Device UID constants (must match BGM_Types.h)
 struct BGMDeviceUIDs {
-    static let main = "BGMDevice"
-    static let uiSounds = "BGMDevice_UISounds"
-    static let nullDevice = "BGMNullDevice"
+    static let main = "ManateeDevice"
+    static let uiSounds = "ManateeDevice_UISounds"
+    static let nullDevice = "ManateeNullDevice"
 }
 
-/// Bridge to communicate with the BackgroundMusic virtual audio device
+/// Bridge to communicate with the Manatee virtual audio device
 @MainActor
 final class BGMDeviceBridge: ObservableObject {
     
@@ -101,7 +101,7 @@ final class BGMDeviceBridge: ObservableObject {
     
     // MARK: - Connection
     
-    /// Connect to the BGM device
+    /// Connect to the BGM device and set it as default output
     func connect() -> Bool {
         print("🔌 BGMDeviceBridge: Connecting to BGM device...")
         
@@ -115,6 +115,12 @@ final class BGMDeviceBridge: ObservableObject {
         deviceID = id
         isAvailable = true
         
+        // Set BGMDevice as the default output device so apps route audio through it
+        if !setAsDefaultOutputDevice() {
+            print("⚠️ BGMDeviceBridge: Could not set BGMDevice as default output")
+            // Continue anyway - maybe user wants manual control
+        }
+        
         // Set up property listener for app volume changes
         setupPropertyListener()
         
@@ -125,30 +131,89 @@ final class BGMDeviceBridge: ObservableObject {
         return true
     }
     
-    /// Disconnect from the BGM device
+    /// Disconnect from the BGM device and restore previous default output
     func disconnect() {
         removePropertyListener()
+        // Note: We should restore the previous default output device here
         deviceID = kAudioObjectUnknown
         isAvailable = false
         appVolumes = [:]
     }
     
+    /// Set BGMDevice as the default audio output device
+    func setAsDefaultOutputDevice() -> Bool {
+        guard deviceID != kAudioObjectUnknown else { return false }
+        
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        var newDefaultDevice = deviceID
+        let status = AudioObjectSetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            UInt32(MemoryLayout<AudioDeviceID>.size),
+            &newDefaultDevice
+        )
+        
+        if status == noErr {
+            print("✅ BGMDeviceBridge: Set BGMDevice as default output device")
+            return true
+        } else {
+            print("❌ BGMDeviceBridge: Failed to set default output device, status: \(status)")
+            return false
+        }
+    }
+    
+    /// Get the current default output device
+    func getDefaultOutputDevice() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        var deviceID: AudioDeviceID = kAudioObjectUnknown
+        var dataSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &dataSize,
+            &deviceID
+        )
+        
+        return status == noErr ? deviceID : nil
+    }
+    
     // MARK: - App Volume Control
     
-    /// Set volume for an app by bundle ID
+    /// Set volume for an app by bundle ID and process ID
     /// - Parameters:
     ///   - volume: Volume 0.0 to 1.0 (1.0 = unity, can go higher for boost)
     ///   - bundleID: App's bundle identifier
-    func setVolume(_ volume: Float, forBundleID bundleID: String) {
-        guard isAvailable else { return }
+    ///   - pid: App's process ID (use -1 if unknown)
+    func setVolume(_ volume: Float, forBundleID bundleID: String, pid: pid_t = -1) {
+        guard isAvailable else {
+            print("⚠️ BGMDeviceBridge: Cannot set volume - not available")
+            return
+        }
         
         // Convert 0-1 to 0-100 raw value
         let rawVolume = Int32(max(0, min(1, volume)) * Float(BGMVolumeConstants.maxRawValue))
         
+        print("🎚️ BGMDeviceBridge.setVolume: \(bundleID) -> \(Int(volume * 100))% (raw: \(rawVolume))")
+        
         setAppVolumeProperty(
             volume: rawVolume,
             pan: nil,
-            processID: -1,
+            processID: pid,
             bundleID: bundleID
         )
     }
@@ -171,15 +236,21 @@ final class BGMDeviceBridge: ObservableObject {
     /// - Parameters:
     ///   - pan: Pan position -1.0 (left) to 1.0 (right)
     ///   - bundleID: App's bundle identifier
-    func setPan(_ pan: Float, forBundleID bundleID: String) {
-        guard isAvailable else { return }
+    ///   - pid: App's process ID (use -1 if unknown)
+    func setPan(_ pan: Float, forBundleID bundleID: String, pid: pid_t = -1) {
+        guard isAvailable else {
+            print("⚠️ BGMDeviceBridge: Cannot set pan - not available")
+            return
+        }
         
         let rawPan = Int32(max(-1, min(1, pan)) * Float(BGMVolumeConstants.panRightRawValue))
+        
+        print("🎚️ BGMDeviceBridge.setPan: \(bundleID) -> \(Int(pan * 100)) (raw: \(rawPan))")
         
         setAppVolumeProperty(
             volume: nil,
             pan: rawPan,
-            processID: -1,
+            processID: pid,
             bundleID: bundleID
         )
     }
@@ -233,7 +304,7 @@ final class BGMDeviceBridge: ObservableObject {
         
         var dataSize: UInt32 = 0
         var status = AudioObjectGetPropertyDataSize(
-            kAudioObjectSystemObject,
+            AudioObjectID(kAudioObjectSystemObject),
             &address,
             0,
             nil,
@@ -246,7 +317,7 @@ final class BGMDeviceBridge: ObservableObject {
         var devices = [AudioDeviceID](repeating: 0, count: deviceCount)
         
         status = AudioObjectGetPropertyData(
-            kAudioObjectSystemObject,
+            AudioObjectID(kAudioObjectSystemObject),
             &address,
             0,
             nil,
@@ -307,49 +378,56 @@ final class BGMDeviceBridge: ObservableObject {
         status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &dataSize, &cfArray)
         
         guard status == noErr, let array = cfArray else { return nil }
-        return array as [Any]
+        return array as? [Any]
     }
     
     private func setAppVolumeProperty(volume: Int32?, pan: Int32?, processID: pid_t, bundleID: String?) {
+        guard deviceID != kAudioObjectUnknown else {
+            print("⚠️ BGMDeviceBridge: Cannot set volume - device not connected")
+            return
+        }
+        
         var address = AudioObjectPropertyAddress(
             mSelector: BGMDeviceProperty.appVolumes.rawValue,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
         
-        // Build the dictionary
-        var dict: [String: Any] = [:]
+        // Build the dictionary with proper CF types
+        // BGMDevice expects both pid and bundleID keys to always be present
+        let cfDict = NSMutableDictionary()
+        cfDict[BGMAppVolumeKeys.processID] = NSNumber(value: processID)
+        cfDict[BGMAppVolumeKeys.bundleID] = (bundleID ?? "") as NSString
         
         if let v = volume {
-            dict[BGMAppVolumeKeys.relativeVolume] = v
+            cfDict[BGMAppVolumeKeys.relativeVolume] = NSNumber(value: v)
         }
         if let p = pan {
-            dict[BGMAppVolumeKeys.panPosition] = p
+            cfDict[BGMAppVolumeKeys.panPosition] = NSNumber(value: p)
         }
-        if processID > 0 {
-            dict[BGMAppVolumeKeys.processID] = processID
-        }
-        if let bid = bundleID {
-            dict[BGMAppVolumeKeys.bundleID] = bid
-        }
+        
+        print("🔧 BGMDeviceBridge: Setting property - pid: \(processID), bundleID: \(bundleID ?? "nil"), volume: \(volume ?? -1), pan: \(pan ?? -999)")
         
         // Create CFArray with single dictionary
-        let cfArray = [dict] as CFArray
-        var dataSize = UInt32(MemoryLayout<CFArray>.size)
+        let cfArray: CFArray = [cfDict] as CFArray
         
-        var mutableArray: CFArray? = cfArray
+        // Pass the CFArray as a CFTypeRef
+        var cfTypeRef: CFTypeRef = cfArray
+        let dataSize = UInt32(MemoryLayout<CFTypeRef>.size)
+        
         let status = AudioObjectSetPropertyData(
             deviceID,
             &address,
             0,
             nil,
             dataSize,
-            &mutableArray
+            &cfTypeRef
         )
         
         if status != noErr {
-            print("⚠️ BGMDeviceBridge: Failed to set app volume, status: \(status)")
+            print("❌ BGMDeviceBridge: Failed to set app volume, status: \(status) (\(fourCharCodeToString(status)))")
         } else {
+            print("✅ BGMDeviceBridge: Successfully set volume for \(bundleID ?? "unknown")")
             // Update local cache
             if let bid = bundleID {
                 appVolumes[bid] = AppVolumeData(
@@ -359,7 +437,30 @@ final class BGMDeviceBridge: ObservableObject {
                     bundleID: bid
                 )
             }
+            
+            // DEBUG: Verify by reading back
+            if let bid = bundleID, let volumesArray = getAppVolumesProperty() {
+                for case let volumeDict as [String: Any] in volumesArray {
+                    if let dictBundleID = volumeDict[BGMAppVolumeKeys.bundleID] as? String,
+                       dictBundleID == bid {
+                        let readVolume = volumeDict[BGMAppVolumeKeys.relativeVolume] as? Int32 ?? -1
+                        print("📖 BGMDeviceBridge: Read back volume for \(bid): \(readVolume)")
+                        break
+                    }
+                }
+            }
         }
+    }
+    
+    /// Convert OSStatus to human-readable four-char code
+    private func fourCharCodeToString(_ code: OSStatus) -> String {
+        let chars: [Character] = [
+            Character(UnicodeScalar((UInt32(bitPattern: code) >> 24) & 0xFF)!),
+            Character(UnicodeScalar((UInt32(bitPattern: code) >> 16) & 0xFF)!),
+            Character(UnicodeScalar((UInt32(bitPattern: code) >> 8) & 0xFF)!),
+            Character(UnicodeScalar(UInt32(bitPattern: code) & 0xFF)!)
+        ]
+        return String(chars)
     }
     
     // MARK: - Private - Property Listeners

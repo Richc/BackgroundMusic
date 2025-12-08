@@ -40,11 +40,15 @@ final class AudioEngine: ObservableObject {
     /// Error message if any
     @Published var errorMessage: String?
     
+    /// Is BackgroundMusic driver available
+    @Published var isBGMDriverAvailable: Bool = false
+    
     // MARK: - Private
     
     private var deviceListenerBlock: AudioObjectPropertyListenerBlock?
     private var appMonitorTimer: Timer?
     private var meterUpdateTimer: Timer?
+    private let bgmBridge = BGMDeviceBridge.shared
     
     // MARK: - Initialization
     
@@ -57,13 +61,54 @@ final class AudioEngine: ObservableObject {
     func initialize() async {
         print("🎛️ AudioEngine starting initialization...")
         
+        // Scan for audio devices FIRST (before changing default output)
+        await refreshDevices()
+        
+        // Debug: Print all output devices and their default status
+        print("📻 Output devices found:")
+        for device in outputDevices {
+            print("   - \(device.name) (ID: \(device.audioObjectID)) default=\(device.isDefault)")
+        }
+        
+        // Remember the current default output device (the real speakers/headphones)
+        // If BGMDevice is already default, pick the first non-BGM device
+        var realOutputDevice = outputDevices.first { $0.isDefault && !$0.name.contains("Manatee") }
+        if realOutputDevice == nil {
+            // Fallback: pick the first non-Manatee output device
+            realOutputDevice = outputDevices.first { !$0.name.contains("Manatee") }
+            print("⚠️ No default non-BGM device, using fallback: \(realOutputDevice?.name ?? "none")")
+        }
+        
+        // Check for BGMDevice driver by attempting to connect
+        isBGMDriverAvailable = bgmBridge.connect()
+        if isBGMDriverAvailable {
+            print("✅ BackgroundMusic driver found")
+            
+            // Start audio passthrough from BGMDevice to real output
+            if let realOutput = realOutputDevice {
+                print("🔊 Starting passthrough: BGMDevice (\(bgmBridge.deviceID)) -> \(realOutput.name) (\(realOutput.audioObjectID))")
+                let passthroughStarted = AudioPassthrough.shared.start(
+                    bgmDevice: bgmBridge.deviceID,
+                    outputDevice: realOutput.audioObjectID
+                )
+                if passthroughStarted {
+                    print("✅ Audio passthrough started to \(realOutput.name)")
+                } else {
+                    print("⚠️ Failed to start audio passthrough")
+                    errorMessage = "Failed to start audio passthrough"
+                }
+            } else {
+                print("❌ No real output device found for passthrough!")
+            }
+        } else {
+            print("⚠️ BackgroundMusic driver NOT found - volume control will not work")
+            errorMessage = "BackgroundMusic driver not installed. Please install it first."
+        }
+        
         // Create master channel
         let master = AudioChannel.master()
         masterChannel = master
         channels.append(master)
-        
-        // Scan for audio devices
-        await refreshDevices()
         
         // Set up device change listener
         setupDeviceListener()
@@ -74,6 +119,11 @@ final class AudioEngine: ObservableObject {
         // Start meter updates
         startMeterUpdates()
         
+        // Sync initial volumes from driver
+        if isBGMDriverAvailable {
+            syncVolumesFromDriver()
+        }
+        
         isRunning = true
         print("✅ AudioEngine initialized with \(channels.count) channels")
     }
@@ -82,6 +132,9 @@ final class AudioEngine: ObservableObject {
         print("🎛️ AudioEngine shutting down...")
         
         isRunning = false
+        
+        // Stop audio passthrough
+        AudioPassthrough.shared.stop()
         
         // Stop timers
         appMonitorTimer?.invalidate()
@@ -205,12 +258,25 @@ final class AudioEngine: ObservableObject {
             
             let channel = AudioChannel.forApplication(app)
             
-            // Set up callbacks
+            // Set up callbacks for volume control via BGMDevice
             channel.onVolumeChanged = { [weak self] volume in
                 self?.setAppVolume(bundleID: bundleID, volume: volume)
             }
             channel.onMuteChanged = { [weak self] muted in
                 self?.setAppMute(bundleID: bundleID, muted: muted)
+            }
+            channel.onPanChanged = { [weak self] pan in
+                self?.setAppPan(bundleID: bundleID, pan: pan)
+            }
+            
+            // Try to get current volume from driver
+            if isBGMDriverAvailable {
+                if let driverVolume = bgmBridge.getVolume(forBundleID: bundleID) {
+                    channel.volume = driverVolume
+                }
+                if let driverPan = bgmBridge.getPan(forBundleID: bundleID) {
+                    channel.pan = driverPan
+                }
             }
             
             channels.append(channel)
@@ -256,14 +322,81 @@ final class AudioEngine: ObservableObject {
     
     // MARK: - Volume Control
     
+    /// Sync volumes from BGMDevice driver to our channels
+    private func syncVolumesFromDriver() {
+        guard isBGMDriverAvailable else { return }
+        
+        // Refresh the bridge's cache
+        bgmBridge.refreshAppVolumes()
+        
+        for channel in channels where channel.channelType == .application {
+            if let driverVolume = bgmBridge.getVolume(forBundleID: channel.identifier) {
+                channel.volume = driverVolume
+            }
+            if let driverPan = bgmBridge.getPan(forBundleID: channel.identifier) {
+                channel.pan = driverPan
+            }
+        }
+        
+        print("📊 Synced app volumes from driver")
+    }
+    
+    func setAppVolume(bundleID: String, pid: pid_t, volume: Float) {
+        guard isBGMDriverAvailable else {
+            print("⚠️ Cannot set volume - BGMDriver not available")
+            return
+        }
+        
+        print("🎚️ AudioEngine.setAppVolume: \(bundleID) (pid: \(pid)) -> \(Int(volume * 100))%")
+        bgmBridge.setVolume(volume, forBundleID: bundleID, pid: pid)
+    }
+    
+    func setAppMute(bundleID: String, pid: pid_t, muted: Bool) {
+        guard isBGMDriverAvailable else {
+            print("⚠️ Cannot set mute - BGMDriver not available")
+            return
+        }
+        
+        // Mute is implemented as volume = 0 in BGMDevice
+        // Note: We should track the pre-mute volume to restore it, but for now this is simple
+        let volume: Float = muted ? 0 : 1.0
+        print("🔇 AudioEngine.setAppMute: \(bundleID) (pid: \(pid)) -> \(muted)")
+        bgmBridge.setVolume(volume, forBundleID: bundleID, pid: pid)
+    }
+    
+    func setAppPan(bundleID: String, pid: pid_t, pan: Float) {
+        guard isBGMDriverAvailable else {
+            print("⚠️ Cannot set pan - BGMDriver not available")
+            return
+        }
+        
+        print("🎚️ AudioEngine.setAppPan: \(bundleID) (pid: \(pid)) -> \(Int(pan * 100))")
+        bgmBridge.setPan(pan, forBundleID: bundleID, pid: pid)
+    }
+    
     func setAppVolume(bundleID: String, volume: Float) {
-        // TODO: Communicate with BGMDriver to set app volume
-        print("🔊 Set volume for \(bundleID): \(volume)")
+        // Get running app with this bundle ID
+        if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
+            setAppVolume(bundleID: bundleID, pid: app.processIdentifier, volume: volume)
+        } else {
+            print("⚠️ AudioEngine.setAppVolume: App not found for \(bundleID)")
+        }
     }
     
     func setAppMute(bundleID: String, muted: Bool) {
-        // TODO: Communicate with BGMDriver to set app mute
-        print("🔇 Set mute for \(bundleID): \(muted)")
+        if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
+            setAppMute(bundleID: bundleID, pid: app.processIdentifier, muted: muted)
+        } else {
+            print("⚠️ AudioEngine.setAppMute: App not found for \(bundleID)")
+        }
+    }
+    
+    func setAppPan(bundleID: String, pan: Float) {
+        if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
+            setAppPan(bundleID: bundleID, pid: app.processIdentifier, pan: pan)
+        } else {
+            print("⚠️ AudioEngine.setAppPan: App not found for \(bundleID)")
+        }
     }
     
     func setMasterVolume(_ volume: Float) {
