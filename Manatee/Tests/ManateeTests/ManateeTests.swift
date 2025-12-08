@@ -82,10 +82,10 @@ final class ManateeTests: XCTestCase {
     
     func testMIDIMappingCreation() {
         let mapping = MIDIMapping(
+            messageType: .controlChange,
             channel: 1,
             controlNumber: 7,
-            messageType: .controlChange,
-            target: .volume(channelIndex: 0),
+            target: .appVolume(bundleID: "com.test.app"),
             behavior: .absolute
         )
         
@@ -94,23 +94,41 @@ final class ManateeTests: XCTestCase {
         XCTAssertEqual(mapping.messageType, .controlChange)
     }
     
-    func testMIDIValueToFloat() {
+    func testMIDIValueCalculation() {
         let mapping = MIDIMapping(
+            messageType: .controlChange,
             channel: 1,
             controlNumber: 1,
-            messageType: .controlChange,
-            target: .volume(channelIndex: 0),
-            behavior: .absolute
+            target: .masterVolume,
+            behavior: .absolute,
+            inputRange: 0...127,
+            outputRange: 0...1
         )
         
         // 0 -> 0.0
-        XCTAssertEqual(mapping.valueToFloat(0), 0.0)
+        XCTAssertEqual(mapping.calculateOutputValue(midiValue: 0), 0.0)
         
         // 127 -> 1.0
-        XCTAssertEqual(mapping.valueToFloat(127), 1.0)
+        XCTAssertEqual(mapping.calculateOutputValue(midiValue: 127), 1.0)
         
         // 64 -> ~0.5
-        XCTAssertEqual(mapping.valueToFloat(64), 64.0/127.0, accuracy: 0.01)
+        XCTAssertEqual(mapping.calculateOutputValue(midiValue: 64), 64.0/127.0, accuracy: 0.01)
+    }
+    
+    func testMIDIMappingWithCustomRange() {
+        let mapping = MIDIMapping(
+            messageType: .controlChange,
+            controlNumber: 1,
+            target: .appVolume(bundleID: "com.test"),
+            inputRange: 20...100,  // Custom input range
+            outputRange: 0...1.5   // Allow volume boost
+        )
+        
+        // Below range should clamp to min
+        XCTAssertEqual(mapping.calculateOutputValue(midiValue: 0), 0.0)
+        
+        // At max input -> max output
+        XCTAssertEqual(mapping.calculateOutputValue(midiValue: 100), 1.5)
     }
     
     // MARK: - ChannelState Tests
@@ -174,27 +192,51 @@ final class ManateeTests: XCTestCase {
     
     func testAudioDeviceEquality() {
         let device1 = AudioDevice(
-            id: 123,
+            audioObjectID: 123,
             uid: "device-uid-1",
             name: "Built-in Output",
-            isInput: false,
-            isOutput: true,
-            channelCount: 2,
-            sampleRate: 48000
+            manufacturer: "Apple Inc.",
+            direction: .output,
+            inputChannelCount: 0,
+            outputChannelCount: 2,
+            sampleRate: 48000,
+            isDefault: true,
+            isVirtual: false
         )
         
         let device2 = AudioDevice(
-            id: 123,
+            audioObjectID: 123,
             uid: "device-uid-1",
             name: "Built-in Output",
-            isInput: false,
-            isOutput: true,
-            channelCount: 2,
-            sampleRate: 48000
+            manufacturer: "Apple Inc.",
+            direction: .output,
+            inputChannelCount: 0,
+            outputChannelCount: 2,
+            sampleRate: 48000,
+            isDefault: true,
+            isVirtual: false
         )
         
         XCTAssertEqual(device1.id, device2.id)
         XCTAssertEqual(device1.uid, device2.uid)
+    }
+    
+    func testManateeDeviceDetection() {
+        let manateeDevice = AudioDevice(
+            audioObjectID: 456,
+            uid: "ManateeDevice-123",
+            name: "Manatee",
+            manufacturer: "Manatee",
+            direction: .output,
+            inputChannelCount: 0,
+            outputChannelCount: 2,
+            sampleRate: 48000,
+            isDefault: false,
+            isVirtual: true
+        )
+        
+        XCTAssertTrue(manateeDevice.isManateeDevice)
+        XCTAssertTrue(manateeDevice.isVirtual)
     }
     
     // MARK: - MixerScene Tests
