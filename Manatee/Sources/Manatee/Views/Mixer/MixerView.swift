@@ -79,12 +79,41 @@ struct MixerView: View {
     
     // MARK: - Toolbar
     
+    private static let logoImage: NSImage? = {
+        // Get the executable path and derive Resources path from it
+        let executablePath = Bundle.main.executablePath ?? ""
+        let appPath = (executablePath as NSString).deletingLastPathComponent
+        let resourcesPath = (appPath as NSString).deletingLastPathComponent + "/Resources"
+        let logoPath = resourcesPath + "/ManateeLogo.png"
+        
+        if let image = NSImage(contentsOfFile: logoPath) {
+            return image
+        }
+        
+        // Fallback: try Bundle.main.resourcePath
+        if let resourcePath = Bundle.main.resourcePath {
+            let fallbackPath = "\(resourcePath)/ManateeLogo.png"
+            if let image = NSImage(contentsOfFile: fallbackPath) {
+                return image
+            }
+        }
+        
+        return nil
+    }()
+    
     private var toolbarView: some View {
         HStack {
             // Logo
-            Image(systemName: "waveform")
-                .font(.title2)
-                .foregroundColor(ManateeColors.brand)
+            if let logoImage = Self.logoImage {
+                Image(nsImage: logoImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 24, height: 24)
+            } else {
+                Image(systemName: "waveform")
+                    .font(.title2)
+                    .foregroundColor(ManateeColors.brand)
+            }
             
             Text("Manatee")
                 .font(.headline)
@@ -219,8 +248,8 @@ struct ChannelStripView: View {
                 .font(ManateeTypography.volumeValue)
                 .foregroundColor(ManateeColors.textSecondary)
             
-            // Pan knob
-            KnobView(value: $channel.pan, range: -1...1)
+            // Pan knob (double-click to center)
+            KnobView(value: $channel.pan, range: -1...1, defaultValue: 0)
                 .frame(width: ManateeDimensions.knobDiameter, height: ManateeDimensions.knobDiameter)
             
             Text("Pan")
@@ -344,6 +373,8 @@ struct FaderView: View {
     @Binding var value: Float
     
     @State private var isDragging = false
+    @State private var dragStartValue: Float = 0
+    @State private var dragStartY: CGFloat = 0
     
     private let trackWidth: CGFloat = 4
     
@@ -353,10 +384,29 @@ struct FaderView: View {
             let thumbPosition = height - (CGFloat(min(value / 1.5, 1.0)) * height)
             
             ZStack {
-                // Track
+                // Track background - make it tappable
                 RoundedRectangle(cornerRadius: 2)
                     .fill(ManateeColors.faderTrack)
                     .frame(width: trackWidth)
+                
+                // Clickable track area (wider hit target)
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: ManateeDimensions.faderWidth)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { gesture in
+                                // Direct positioning - click to move fader to that position
+                                let newY = min(max(gesture.location.y, 0), height)
+                                let newValue = Float(1.0 - newY / height) * 1.5
+                                value = newValue
+                                isDragging = true
+                            }
+                            .onEnded { _ in
+                                isDragging = false
+                            }
+                    )
                 
                 // Unity mark (0dB)
                 let unityY = height - (CGFloat(1.0 / 1.5) * height)
@@ -365,24 +415,13 @@ struct FaderView: View {
                     .frame(width: 20, height: 1)
                     .offset(y: unityY - height/2)
                 
-                // Thumb
+                // Thumb (visual only, interaction is on track)
                 RoundedRectangle(cornerRadius: ManateeDimensions.faderThumbCornerRadius)
                     .fill(isDragging ? ManateeColors.faderCapActive : ManateeColors.faderCap)
                     .frame(width: ManateeDimensions.faderThumbWidth, height: ManateeDimensions.faderThumbHeight)
                     .shadow(color: ManateeShadows.subtle, radius: 2, y: 1)
                     .offset(y: thumbPosition - height/2)
-                    .gesture(
-                        DragGesture()
-                            .onChanged { gesture in
-                                isDragging = true
-                                let newY = min(max(gesture.location.y, 0), height)
-                                let newValue = Float(1.0 - newY / height) * 1.5
-                                value = newValue
-                            }
-                            .onEnded { _ in
-                                isDragging = false
-                            }
-                    )
+                    .allowsHitTesting(false) // Let clicks pass through to track
             }
             .frame(width: ManateeDimensions.faderWidth)
         }
@@ -394,9 +433,15 @@ struct FaderView: View {
 struct KnobView: View {
     @Binding var value: Float
     var range: ClosedRange<Float> = 0...1
+    var defaultValue: Float? = nil
     
     @State private var isDragging = false
-    @State private var lastDragY: CGFloat = 0
+    @State private var dragStartValue: Float = 0
+    @State private var dragStartY: CGFloat = 0
+    
+    private var centerValue: Float {
+        defaultValue ?? (range.lowerBound + range.upperBound) / 2
+    }
     
     var body: some View {
         GeometryReader { geometry in
@@ -427,22 +472,32 @@ struct KnobView: View {
                     .offset(y: -size/6)
                     .rotationEffect(angle)
             }
+            .contentShape(Circle())
+            .simultaneousGesture(
+                TapGesture(count: 2)
+                    .onEnded {
+                        // Double-click to reset to center/default value
+                        value = centerValue
+                    }
+            )
             .gesture(
-                DragGesture()
+                DragGesture(minimumDistance: 5)
                     .onChanged { gesture in
-                        isDragging = true
-                        let delta = Float((lastDragY - gesture.location.y) / 100)
-                        let newValue = min(max(value + delta * (range.upperBound - range.lowerBound), range.lowerBound), range.upperBound)
+                        if !isDragging {
+                            // Store initial state when drag begins
+                            isDragging = true
+                            dragStartValue = value
+                            dragStartY = gesture.startLocation.y
+                        }
+                        // Calculate delta from drag start position
+                        let delta = Float((dragStartY - gesture.location.y) / 100)
+                        let newValue = min(max(dragStartValue + delta * (range.upperBound - range.lowerBound), range.lowerBound), range.upperBound)
                         value = newValue
-                        lastDragY = gesture.location.y
                     }
                     .onEnded { _ in
                         isDragging = false
                     }
             )
-            .onAppear {
-                lastDragY = geometry.size.height / 2
-            }
         }
     }
 }

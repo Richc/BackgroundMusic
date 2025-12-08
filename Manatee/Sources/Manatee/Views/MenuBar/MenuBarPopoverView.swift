@@ -44,10 +44,25 @@ struct MenuBarPopoverView: View {
     
     // MARK: - Header
     
+    private static let logoImage: NSImage? = {
+        let executablePath = Bundle.main.executablePath ?? ""
+        let appPath = (executablePath as NSString).deletingLastPathComponent
+        let resourcesPath = (appPath as NSString).deletingLastPathComponent + "/Resources"
+        let logoPath = resourcesPath + "/ManateeLogo.png"
+        return NSImage(contentsOfFile: logoPath)
+    }()
+    
     private var headerView: some View {
         HStack {
-            Image(systemName: "waveform")
-                .foregroundColor(ManateeColors.brand)
+            if let logoImage = Self.logoImage {
+                Image(nsImage: logoImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 18, height: 18)
+            } else {
+                Image(systemName: "waveform")
+                    .foregroundColor(ManateeColors.brand)
+            }
             
             Text("Manatee")
                 .font(.headline)

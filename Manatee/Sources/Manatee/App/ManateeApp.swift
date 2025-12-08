@@ -35,7 +35,7 @@ struct ManateeApp: App {
             MenuBarPopoverView()
                 .environmentObject(appDelegate.audioEngine)
         } label: {
-            Image(systemName: "slider.horizontal.3")
+            MenuBarIconView()
         }
         .menuBarExtraStyle(.window)
     }
