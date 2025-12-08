@@ -46,6 +46,7 @@ final class AudioEngine: ObservableObject {
     // MARK: - Private
     
     private var deviceListenerBlock: AudioObjectPropertyListenerBlock?
+    private var bgmVolumeListenerBlock: AudioObjectPropertyListenerBlock?
     private var appMonitorTimer: Timer?
     private var meterUpdateTimer: Timer?
     private let bgmBridge = BGMDeviceBridge.shared
@@ -107,11 +108,22 @@ final class AudioEngine: ObservableObject {
         
         // Create master channel
         let master = AudioChannel.master()
+        master.onVolumeChanged = { [weak self] volume in
+            self?.applyMasterVolume(volume)
+        }
+        master.onMuteChanged = { [weak self] muted in
+            self?.applyMasterMute(muted)
+        }
         masterChannel = master
         channels.append(master)
         
         // Set up device change listener
         setupDeviceListener()
+        
+        // Set up BGMDevice volume listener (for keyboard volume keys)
+        if isBGMDriverAvailable {
+            setupBGMVolumeListener()
+        }
         
         // Start monitoring running applications
         startAppMonitoring()
@@ -145,6 +157,9 @@ final class AudioEngine: ObservableObject {
         
         // Remove device listener
         removeDeviceListener()
+        
+        // Remove BGM volume listener
+        removeBGMVolumeListener()
         
         channels.removeAll()
         
@@ -224,72 +239,200 @@ final class AudioEngine: ObservableObject {
         deviceListenerBlock = nil
     }
     
-    // MARK: - Application Monitoring
-    
-    private func startAppMonitoring() {
-        // Initial scan
-        updateRunningApps()
+    private func setupBGMVolumeListener() {
+        guard bgmBridge.isAvailable else { return }
         
-        // Monitor for app changes every 2 seconds
-        appMonitorTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        let deviceID = bgmBridge.deviceID
+        
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        bgmVolumeListenerBlock = { [weak self] _, _ in
             Task { @MainActor in
-                self?.updateRunningApps()
+                self?.syncBGMDeviceVolume()
+            }
+        }
+        
+        if let block = bgmVolumeListenerBlock {
+            let status = AudioObjectAddPropertyListenerBlock(
+                deviceID,
+                &address,
+                DispatchQueue.main,
+                block
+            )
+            
+            if status == noErr {
+                print("🔊 AudioEngine: Listening for BGMDevice volume changes")
+                // Sync initial volume
+                syncBGMDeviceVolume()
+            } else {
+                print("⚠️ AudioEngine: Failed to add BGM volume listener: \(status)")
             }
         }
     }
     
-    private func updateRunningApps() {
-        let workspace = NSWorkspace.shared
-        let runningApps = workspace.runningApplications.filter { app in
-            // Only include regular applications (not background agents)
-            app.activationPolicy == .regular &&
-            app.bundleIdentifier != Bundle.main.bundleIdentifier
-        }
+    private func removeBGMVolumeListener() {
+        guard let block = bgmVolumeListenerBlock, bgmBridge.isAvailable else { return }
         
-        // Get current app bundle IDs
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        AudioObjectRemovePropertyListenerBlock(
+            bgmBridge.deviceID,
+            &address,
+            DispatchQueue.main,
+            block
+        )
+        
+        bgmVolumeListenerBlock = nil
+    }
+    
+    private func syncBGMDeviceVolume() {
+        guard bgmBridge.isAvailable else { return }
+        
+        let deviceID = bgmBridge.deviceID
+        
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        var volume: Float32 = 1.0
+        var dataSize = UInt32(MemoryLayout<Float32>.size)
+        
+        let status = AudioObjectGetPropertyData(
+            deviceID,
+            &address,
+            0,
+            nil,
+            &dataSize,
+            &volume
+        )
+        
+        if status == noErr {
+            print("🔊 AudioEngine: BGMDevice volume = \(Int(volume * 100))%")
+            AudioPassthrough.shared.setSystemVolume(volume)
+        } else {
+            print("⚠️ AudioEngine: Failed to get BGM volume: \(status)")
+        }
+    }
+    
+    // MARK: - Application Monitoring
+    
+    private let appStore = ManagedAppStore.shared
+    
+    private func startAppMonitoring() {
+        // Initial scan
+        updateManagedAppChannels()
+        
+        // Monitor for app changes every 2 seconds
+        appMonitorTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.updateManagedAppChannels()
+            }
+        }
+    }
+    
+    /// Update channels based on managed apps (only shows user-selected apps)
+    private func updateManagedAppChannels() {
+        let managedApps = appStore.managedApps
+        appStore.updateRunningApps()
+        
+        // Get current app channels
         let currentAppChannels = channels.filter { $0.channelType == .application }
         let currentBundleIDs = Set(currentAppChannels.map { $0.identifier })
-        let runningBundleIDs = Set(runningApps.compactMap { $0.bundleIdentifier })
+        let managedBundleIDs = Set(managedApps.map { $0.bundleID })
         
-        // Add new apps
-        for app in runningApps {
-            guard let bundleID = app.bundleIdentifier,
-                  !currentBundleIDs.contains(bundleID) else { continue }
-            
-            let channel = AudioChannel.forApplication(app)
-            
-            // Set up callbacks for volume control via BGMDevice
-            channel.onVolumeChanged = { [weak self] volume in
-                self?.setAppVolume(bundleID: bundleID, volume: volume)
+        // Add channels for managed apps that don't have channels yet
+        for managedApp in managedApps {
+            if !currentBundleIDs.contains(managedApp.bundleID) {
+                let channel = createChannelForManagedApp(managedApp)
+                channels.append(channel)
+                print("➕ Added managed app channel: \(channel.name)")
             }
-            channel.onMuteChanged = { [weak self] muted in
-                self?.setAppMute(bundleID: bundleID, muted: muted)
-            }
-            channel.onPanChanged = { [weak self] pan in
-                self?.setAppPan(bundleID: bundleID, pan: pan)
-            }
-            
-            // Try to get current volume from driver
-            if isBGMDriverAvailable {
-                if let driverVolume = bgmBridge.getVolume(forBundleID: bundleID) {
-                    channel.volume = driverVolume
-                }
-                if let driverPan = bgmBridge.getPan(forBundleID: bundleID) {
-                    channel.pan = driverPan
-                }
-            }
-            
-            channels.append(channel)
-            print("➕ Added app channel: \(channel.name)")
         }
         
-        // Remove closed apps
+        // Remove channels for apps that are no longer managed
         for channel in currentAppChannels {
-            if !runningBundleIDs.contains(channel.identifier) {
+            if !managedBundleIDs.contains(channel.identifier) {
                 channels.removeAll { $0.id == channel.id }
-                print("➖ Removed app channel: \(channel.name)")
+                print("➖ Removed unmanaged app channel: \(channel.name)")
             }
         }
+        
+        // Update active state for all app channels
+        for channel in channels where channel.channelType == .application {
+            let isRunning = appStore.isAppRunning(channel.identifier)
+            channel.isActive = isRunning
+        }
+    }
+    
+    /// Create a channel for a managed app
+    private func createChannelForManagedApp(_ managedApp: ManagedApp) -> AudioChannel {
+        let channel = AudioChannel(
+            channelType: .application,
+            identifier: managedApp.bundleID,
+            name: managedApp.name,
+            icon: managedApp.loadIcon()
+        )
+        
+        let bundleID = managedApp.bundleID
+        
+        // Set up callbacks for volume control via BGMDevice
+        channel.onVolumeChanged = { [weak self] volume in
+            self?.setAppVolume(bundleID: bundleID, volume: volume)
+        }
+        channel.onMuteChanged = { [weak self] muted in
+            self?.setAppMute(bundleID: bundleID, muted: muted)
+        }
+        channel.onPanChanged = { [weak self] pan in
+            self?.setAppPan(bundleID: bundleID, pan: pan)
+        }
+        
+        // Try to get current volume from driver
+        if isBGMDriverAvailable {
+            if let driverVolume = bgmBridge.getVolume(forBundleID: bundleID) {
+                channel.volume = driverVolume
+            }
+            if let driverPan = bgmBridge.getPan(forBundleID: bundleID) {
+                channel.pan = driverPan
+            }
+        }
+        
+        // Set initial active state
+        channel.isActive = managedApp.isRunning
+        
+        return channel
+    }
+    
+    /// Add an app to the managed list and create its channel
+    func addManagedApp(_ app: ManagedApp) {
+        appStore.addApp(app)
+        updateManagedAppChannels()
+    }
+    
+    /// Add an app from a running application
+    func addManagedApp(from runningApp: NSRunningApplication) {
+        appStore.addApp(from: runningApp)
+        updateManagedAppChannels()
+    }
+    
+    /// Remove an app from the managed list
+    func removeManagedApp(bundleID: String) {
+        appStore.removeApp(bundleID: bundleID)
+        updateManagedAppChannels()
+    }
+    
+    /// Get available apps to add (running apps not yet managed)
+    func availableAppsToAdd() -> [NSRunningApplication] {
+        appStore.availableAppsToAdd()
     }
     
     // MARK: - Meter Updates
@@ -347,8 +490,12 @@ final class AudioEngine: ObservableObject {
             return
         }
         
-        print("🎚️ AudioEngine.setAppVolume: \(bundleID) (pid: \(pid)) -> \(Int(volume * 100))%")
-        bgmBridge.setVolume(volume, forBundleID: bundleID, pid: pid)
+        // Apply master volume and mute
+        let masterVolume = (masterChannel?.isMuted == true) ? 0 : (masterChannel?.volume ?? 1.0)
+        let effectiveVolume = volume * masterVolume
+        
+        print("🎚️ AudioEngine.setAppVolume: \(bundleID) (pid: \(pid)) -> \(Int(volume * 100))% (effective: \(Int(effectiveVolume * 100))%)")
+        bgmBridge.setVolume(effectiveVolume, forBundleID: bundleID, pid: pid)
     }
     
     func setAppMute(bundleID: String, pid: pid_t, muted: Bool) {
@@ -357,11 +504,12 @@ final class AudioEngine: ObservableObject {
             return
         }
         
-        // Mute is implemented as volume = 0 in BGMDevice
-        // Note: We should track the pre-mute volume to restore it, but for now this is simple
-        let volume: Float = muted ? 0 : 1.0
-        print("🔇 AudioEngine.setAppMute: \(bundleID) (pid: \(pid)) -> \(muted)")
-        bgmBridge.setVolume(volume, forBundleID: bundleID, pid: pid)
+        // Get the channel's current fader volume and apply master volume
+        let faderVolume = channels.first { $0.identifier == bundleID }?.volume ?? 1.0
+        let masterVolume = (masterChannel?.isMuted == true) ? 0 : (masterChannel?.volume ?? 1.0)
+        let effectiveVolume: Float = muted ? 0 : (faderVolume * masterVolume)
+        print("🔇 AudioEngine.setAppMute: \(bundleID) (pid: \(pid)) -> \(muted) (effective: \(Int(effectiveVolume * 100))%)")
+        bgmBridge.setVolume(effectiveVolume, forBundleID: bundleID, pid: pid)
     }
     
     func setAppPan(bundleID: String, pid: pid_t, pan: Float) {
@@ -399,15 +547,51 @@ final class AudioEngine: ObservableObject {
         }
     }
     
+    // MARK: - Master Volume
+    
+    /// Apply master volume to all app channels (called from callback)
+    private func applyMasterVolume(_ volume: Float) {
+        print("🔊 Master volume changed: \(Int(volume * 100))%")
+        
+        // Apply master volume to all app channels
+        for channel in channels where channel.channelType == .application && channel.isActive {
+            // The effective volume is fader * master
+            let effectiveVolume = channel.isMuted ? 0 : channel.volume * volume
+            if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == channel.identifier }) {
+                bgmBridge.setVolume(effectiveVolume, forBundleID: channel.identifier, pid: app.processIdentifier)
+            }
+        }
+    }
+    
+    /// Apply master mute to all channels (called from callback)
+    private func applyMasterMute(_ muted: Bool) {
+        print("🔇 Master mute changed: \(muted)")
+        
+        if muted {
+            // Mute all apps
+            for channel in channels where channel.channelType == .application && channel.isActive {
+                if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == channel.identifier }) {
+                    bgmBridge.setVolume(0, forBundleID: channel.identifier, pid: app.processIdentifier)
+                }
+            }
+        } else {
+            // Restore all app volumes
+            let masterVolume = masterChannel?.volume ?? 1.0
+            for channel in channels where channel.channelType == .application && channel.isActive {
+                let effectiveVolume = channel.isMuted ? 0 : channel.volume * masterVolume
+                if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == channel.identifier }) {
+                    bgmBridge.setVolume(effectiveVolume, forBundleID: channel.identifier, pid: app.processIdentifier)
+                }
+            }
+        }
+    }
+    
     func setMasterVolume(_ volume: Float) {
         masterChannel?.volume = volume
-        // TODO: Set system volume or driver master volume
-        print("🔊 Set master volume: \(volume)")
     }
     
     func setMasterMute(_ muted: Bool) {
         masterChannel?.isMuted = muted
-        print("🔇 Set master mute: \(muted)")
     }
     
     // MARK: - Channel Access

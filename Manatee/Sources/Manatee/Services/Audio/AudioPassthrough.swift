@@ -81,6 +81,9 @@ final class PassthroughContext {
     var inputCallCount: Int = 0
     var outputCallCount: Int = 0
     
+    /// System volume (from BGMDevice volume control or keyboard) - applied during output
+    var systemVolume: Float = 1.0
+    
     init(bufferSize: Int) {
         // Ring buffer holds samples (frames * channels)
         self.ringBuffer = AudioRingBuffer(capacity: bufferSize)
@@ -233,6 +236,17 @@ final class AudioPassthrough {
         }
     }
     
+    /// Set the system volume (called when keyboard volume changes)
+    func setSystemVolume(_ volume: Float) {
+        context?.systemVolume = volume
+        print("🔊 AudioPassthrough: System volume set to \(Int(volume * 100))%")
+    }
+    
+    /// Get current system volume
+    var systemVolume: Float {
+        context?.systemVolume ?? 1.0
+    }
+    
     /// Stop audio passthrough
     func stop() {
         guard isRunning else { return }
@@ -335,6 +349,14 @@ private func passthroughOutputIOProc(
     
     // Read from ring buffer
     _ = context.ringBuffer.read(floatData, count: sampleCount)
+    
+    // Apply system volume (from keyboard volume keys)
+    let volume = context.systemVolume
+    if volume < 0.999 {  // Only process if not at unity
+        for i in 0..<sampleCount {
+            floatData[i] *= volume
+        }
+    }
     
     return noErr
 }

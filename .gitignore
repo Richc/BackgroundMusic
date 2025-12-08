@@ -37,3 +37,4 @@ xcuserdata
 ## Obj-C/Swift specific
 *.hmap
 *.ipa
+Manatee/.build

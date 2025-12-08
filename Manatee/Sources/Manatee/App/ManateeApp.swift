@@ -19,6 +19,8 @@ struct ManateeApp: App {
             MixerView()
                 .environmentObject(appDelegate.audioEngine)
                 .environmentObject(appDelegate.midiService)
+                .environmentObject(appDelegate.oscService)
+                .environmentObject(appDelegate.presetStore)
         }
         .defaultSize(width: 1200, height: 600)
         
@@ -49,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let audioEngine = AudioEngine()
     let midiService = MIDIService()
     let oscService = OSCService()
+    let presetStore = PresetStore()
     
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in

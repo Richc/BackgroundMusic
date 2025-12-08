@@ -217,12 +217,14 @@ enum ManateeShadows {
 
 struct ChannelStripStyle: ViewModifier {
     var isSelected: Bool = false
+    var isInactive: Bool = false
     
     func body(content: Content) -> some View {
         content
             .frame(width: ManateeDimensions.channelWidth)
             .background(isSelected ? ManateeColors.channelBackgroundSelected : ManateeColors.channelBackground)
             .cornerRadius(ManateeDimensions.cornerRadius)
+            .opacity(isInactive ? 0.5 : 1.0)
     }
 }
 
@@ -257,7 +259,7 @@ struct SoloButtonStyle: ButtonStyle {
 // MARK: - View Extensions
 
 extension View {
-    func channelStripStyle(isSelected: Bool = false) -> some View {
-        modifier(ChannelStripStyle(isSelected: isSelected))
+    func channelStripStyle(isSelected: Bool = false, isInactive: Bool = false) -> some View {
+        modifier(ChannelStripStyle(isSelected: isSelected, isInactive: isInactive))
     }
 }

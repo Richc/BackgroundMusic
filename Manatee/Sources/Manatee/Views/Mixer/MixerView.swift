@@ -10,9 +10,15 @@ import SwiftUI
 struct MixerView: View {
     @EnvironmentObject var audioEngine: AudioEngine
     @EnvironmentObject var midiService: MIDIService
+    @EnvironmentObject var oscService: OSCService
+    @EnvironmentObject var presetStore: PresetStore
     
     @State private var selectedChannelID: UUID?
     @State private var showingPreferences = false
+    @State private var showingAddApp = false
+    @State private var showingControlSettings = false
+    @State private var showingSaveScene = false
+    @State private var newSceneName = ""
     @State private var currentBank = 0
     @State private var channelsPerBank = 8
     
@@ -31,11 +37,19 @@ struct MixerView: View {
                         ForEach(visibleChannels) { channel in
                             ChannelStripView(
                                 channel: channel,
-                                isSelected: channel.id == selectedChannelID
+                                isSelected: channel.id == selectedChannelID,
+                                onRemove: {
+                                    audioEngine.removeManagedApp(bundleID: channel.identifier)
+                                }
                             )
                             .onTapGesture {
                                 selectedChannelID = channel.id
                             }
+                        }
+                        
+                        // Add App button
+                        AddAppButton {
+                            showingAddApp = true
                         }
                     }
                     .padding(.horizontal, 8)
@@ -59,6 +73,29 @@ struct MixerView: View {
             statusBarView
         }
         .background(ManateeColors.windowBackground)
+        .sheet(isPresented: $showingAddApp) {
+            AddAppView()
+                .environmentObject(audioEngine)
+        }
+        .sheet(isPresented: $showingSaveScene) {
+            SaveSceneSheet(
+                sceneName: $newSceneName,
+                onSave: {
+                    let scene = MixerScene(
+                        name: newSceneName.isEmpty ? "Scene \(presetStore.scenes.count + 1)" : newSceneName,
+                        index: presetStore.scenes.count,
+                        channelStates: presetStore.captureCurrentState(from: audioEngine)
+                    )
+                    presetStore.saveScene(scene)
+                    newSceneName = ""
+                    showingSaveScene = false
+                },
+                onCancel: {
+                    newSceneName = ""
+                    showingSaveScene = false
+                }
+            )
+        }
     }
     
     // MARK: - Visible Channels
@@ -75,6 +112,22 @@ struct MixerView: View {
     private var totalBanks: Int {
         let appCount = audioEngine.channels.filter { $0.channelType == .application }.count
         return max(1, Int(ceil(Double(appCount) / Double(channelsPerBank))))
+    }
+    
+    // MARK: - Control Protocol Status
+    
+    private var controlProtocolLabel: String {
+        if oscService.isRunning && midiService.isRunning {
+            return "MIDI/OSC"
+        } else if oscService.isRunning {
+            return "OSC"
+        } else {
+            return "MIDI"
+        }
+    }
+    
+    private var controlProtocolStatus: Bool {
+        midiService.isRunning || oscService.isRunning
     }
     
     // MARK: - Toolbar
@@ -122,16 +175,41 @@ struct MixerView: View {
             
             // Scene selector
             Menu {
-                Button("Scene 1: Default") { }
-                Button("Scene 2: Recording") { }
-                Button("Scene 3: Streaming") { }
+                if presetStore.scenes.isEmpty {
+                    Text("No scenes saved")
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(presetStore.scenes) { scene in
+                        Button {
+                            Task {
+                                await presetStore.recallScene(scene, to: audioEngine)
+                            }
+                        } label: {
+                            HStack {
+                                Text("Scene \(scene.index + 1): \(scene.name)")
+                                if presetStore.currentScene?.id == scene.id {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                }
                 Divider()
-                Button("Save Scene...") { }
+                Button("Save Current as Scene...") {
+                    showingSaveScene = true
+                }
             } label: {
-                Label("Scene", systemImage: "square.stack.3d.up")
+                HStack(spacing: 4) {
+                    Image(systemName: "square.stack.3d.up")
+                    if let current = presetStore.currentScene {
+                        Text(current.name)
+                    } else {
+                        Text("Scene")
+                    }
+                }
             }
             .menuStyle(.borderlessButton)
-            .frame(width: 120)
+            .frame(width: 140)
             
             Divider()
                 .frame(height: 20)
@@ -163,13 +241,25 @@ struct MixerView: View {
             
             Spacer()
             
-            // MIDI indicator
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(midiService.isRunning ? Color.green : Color.red)
-                    .frame(width: 8, height: 8)
-                Text("MIDI")
-                    .font(.caption)
+            // MIDI/OSC settings button
+            Button {
+                showingControlSettings = true
+            } label: {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(controlProtocolStatus ? Color.green : Color.red)
+                        .frame(width: 8, height: 8)
+                    Text(controlProtocolLabel)
+                        .font(.caption)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                }
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showingControlSettings) {
+                ControlSettingsPopover()
+                    .environmentObject(midiService)
+                    .environmentObject(oscService)
             }
             
             Button {
@@ -226,31 +316,42 @@ struct MixerView: View {
 struct ChannelStripView: View {
     @ObservedObject var channel: AudioChannel
     var isSelected: Bool = false
+    var onRemove: (() -> Void)? = nil
+    
+    @State private var isHovering = false
+    
+    private var isInactive: Bool {
+        channel.channelType == .application && !channel.isActive
+    }
     
     var body: some View {
         VStack(spacing: 8) {
-            // Icon and name
+            // Icon and name with remove button
             channelHeader
             
             // VU Meter
             HStack(spacing: 2) {
-                VUMeterView(level: channel.peakLevelLeft)
-                VUMeterView(level: channel.peakLevelRight)
+                VUMeterView(level: isInactive ? 0 : channel.peakLevelLeft)
+                VUMeterView(level: isInactive ? 0 : channel.peakLevelRight)
             }
             .frame(height: 120)
             
             // Fader
             FaderView(value: $channel.volume)
                 .frame(height: ManateeDimensions.faderHeight)
+                .opacity(isInactive ? 0.5 : 1.0)
+                .allowsHitTesting(!isInactive)
             
             // Volume display
             Text(channel.volumeDBFormatted)
                 .font(ManateeTypography.volumeValue)
-                .foregroundColor(ManateeColors.textSecondary)
+                .foregroundColor(isInactive ? ManateeColors.textTertiary : ManateeColors.textSecondary)
             
             // Pan knob (double-click to center)
             KnobView(value: $channel.pan, range: -1...1, defaultValue: 0)
                 .frame(width: ManateeDimensions.knobDiameter, height: ManateeDimensions.knobDiameter)
+                .opacity(isInactive ? 0.5 : 1.0)
+                .allowsHitTesting(!isInactive)
             
             Text("Pan")
                 .font(.system(size: 8))
@@ -262,34 +363,107 @@ struct ChannelStripView: View {
                     channel.isMuted.toggle()
                 }
                 .buttonStyle(MuteButtonStyle(isActive: channel.isMuted))
+                .disabled(isInactive)
                 
                 Button("S") {
                     channel.isSoloed.toggle()
                 }
                 .buttonStyle(SoloButtonStyle(isActive: channel.isSoloed))
+                .disabled(isInactive)
             }
+            .opacity(isInactive ? 0.5 : 1.0)
         }
         .padding(8)
-        .channelStripStyle(isSelected: isSelected)
+        .channelStripStyle(isSelected: isSelected, isInactive: isInactive)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .overlay(alignment: .topTrailing) {
+            // Remove button on hover
+            if isHovering && onRemove != nil {
+                Button {
+                    onRemove?()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.red.opacity(0.8))
+                        .font(.system(size: 14))
+                }
+                .buttonStyle(.plain)
+                .padding(4)
+            }
+        }
     }
     
     private var channelHeader: some View {
         VStack(spacing: 4) {
-            if let icon = channel.icon {
-                Image(nsImage: icon)
-                    .resizable()
+            ZStack {
+                if let icon = channel.icon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 28, height: 28)
+                        .opacity(isInactive ? 0.5 : 1.0)
+                        .saturation(isInactive ? 0.3 : 1.0)
+                } else {
+                    Image(systemName: channel.channelType == .master ? "speaker.wave.3.fill" : "app.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(isInactive ? ManateeColors.textTertiary : ManateeColors.textSecondary)
+                }
+                
+                // Inactive overlay badge
+                if isInactive {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            Circle()
+                                .fill(Color.gray)
+                                .frame(width: 8, height: 8)
+                                .overlay(
+                                    Circle()
+                                        .stroke(ManateeColors.channelBackground, lineWidth: 1)
+                                )
+                        }
+                    }
                     .frame(width: 28, height: 28)
-            } else {
-                Image(systemName: channel.channelType == .master ? "speaker.wave.3.fill" : "app.fill")
-                    .font(.system(size: 20))
-                    .foregroundColor(ManateeColors.textSecondary)
+                }
             }
             
             Text(channel.name)
                 .font(ManateeTypography.channelName)
+                .foregroundColor(isInactive ? ManateeColors.textTertiary : ManateeColors.textPrimary)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
         }
+    }
+}
+
+// MARK: - Add App Button
+
+struct AddAppButton: View {
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
+                        .foregroundColor(ManateeColors.textTertiary)
+                    
+                    Image(systemName: "plus")
+                        .font(.system(size: 24, weight: .light))
+                        .foregroundColor(ManateeColors.textTertiary)
+                }
+                .frame(width: 50, height: 50)
+                
+                Text("Add App")
+                    .font(.caption)
+                    .foregroundColor(ManateeColors.textTertiary)
+            }
+            .frame(width: ManateeDimensions.channelWidth)
+            .frame(maxHeight: .infinity)
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -381,50 +555,47 @@ struct FaderView: View {
     var body: some View {
         GeometryReader { geometry in
             let height = geometry.size.height
+            let width = geometry.size.width
             let thumbPosition = height - (CGFloat(min(value / 1.5, 1.0)) * height)
             
-            ZStack {
-                // Track background - make it tappable
+            ZStack(alignment: .center) {
+                // Track background - centered
                 RoundedRectangle(cornerRadius: 2)
                     .fill(ManateeColors.faderTrack)
-                    .frame(width: trackWidth)
+                    .frame(width: trackWidth, height: height)
+                    .position(x: width / 2, y: height / 2)
                 
-                // Clickable track area (wider hit target)
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(width: ManateeDimensions.faderWidth)
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { gesture in
-                                // Direct positioning - click to move fader to that position
-                                let newY = min(max(gesture.location.y, 0), height)
-                                let newValue = Float(1.0 - newY / height) * 1.5
-                                value = newValue
-                                isDragging = true
-                            }
-                            .onEnded { _ in
-                                isDragging = false
-                            }
-                    )
-                
-                // Unity mark (0dB)
+                // Unity mark (0dB) - centered
                 let unityY = height - (CGFloat(1.0 / 1.5) * height)
                 Rectangle()
                     .fill(Color.white.opacity(0.5))
                     .frame(width: 20, height: 1)
-                    .offset(y: unityY - height/2)
+                    .position(x: width / 2, y: unityY)
                 
-                // Thumb (visual only, interaction is on track)
+                // Thumb - centered horizontally
                 RoundedRectangle(cornerRadius: ManateeDimensions.faderThumbCornerRadius)
                     .fill(isDragging ? ManateeColors.faderCapActive : ManateeColors.faderCap)
                     .frame(width: ManateeDimensions.faderThumbWidth, height: ManateeDimensions.faderThumbHeight)
                     .shadow(color: ManateeShadows.subtle, radius: 2, y: 1)
-                    .offset(y: thumbPosition - height/2)
-                    .allowsHitTesting(false) // Let clicks pass through to track
+                    .position(x: width / 2, y: thumbPosition)
             }
-            .frame(width: ManateeDimensions.faderWidth)
+            .frame(width: width, height: height)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        // Direct positioning - click/drag to move fader to that position
+                        let newY = min(max(gesture.location.y, 0), height)
+                        let newValue = Float(1.0 - newY / height) * 1.5
+                        value = newValue
+                        isDragging = true
+                    }
+                    .onEnded { _ in
+                        isDragging = false
+                    }
+            )
         }
+        .frame(width: ManateeDimensions.faderWidth)
     }
 }
 
@@ -502,11 +673,165 @@ struct KnobView: View {
     }
 }
 
+// MARK: - Control Settings Popover
+
+struct ControlSettingsPopover: View {
+    @EnvironmentObject var midiService: MIDIService
+    @EnvironmentObject var oscService: OSCService
+    
+    @AppStorage("midiEnabled") private var midiEnabled = true
+    @AppStorage("oscEnabled") private var oscEnabled = false
+    @AppStorage("oscPort") private var oscPort = 9000
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Control Settings")
+                .font(.headline)
+            
+            Divider()
+            
+            // MIDI Section
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "pianokeys")
+                    Text("MIDI")
+                        .font(.subheadline.bold())
+                    Spacer()
+                    Toggle("", isOn: $midiEnabled)
+                        .toggleStyle(.switch)
+                        .scaleEffect(0.8)
+                }
+                
+                if midiEnabled {
+                    HStack {
+                        Circle()
+                            .fill(midiService.isRunning ? Color.green : Color.red)
+                            .frame(width: 8, height: 8)
+                        Text(midiService.isRunning ? "Connected" : "No devices")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    if !midiService.inputDevices.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Devices:")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            ForEach(midiService.inputDevices.prefix(3), id: \.displayName) { device in
+                                Text("• \(device.displayName)")
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                }
+            }
+            
+            Divider()
+            
+            // OSC Section
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "network")
+                    Text("OSC")
+                        .font(.subheadline.bold())
+                    Spacer()
+                    Toggle("", isOn: $oscEnabled)
+                        .toggleStyle(.switch)
+                        .scaleEffect(0.8)
+                }
+                
+                if oscEnabled {
+                    HStack {
+                        Circle()
+                            .fill(oscService.isRunning ? Color.green : Color.red)
+                            .frame(width: 8, height: 8)
+                        Text(oscService.isRunning ? "Listening" : "Stopped")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    HStack {
+                        Text("Port:")
+                            .font(.caption)
+                        TextField("", value: $oscPort, format: .number)
+                            .frame(width: 60)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.caption)
+                    }
+                }
+            }
+            
+            Divider()
+            
+            // Last message
+            if !midiService.lastReceivedMessage.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Last MIDI:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(midiService.lastReceivedMessage)
+                        .font(.caption.monospaced())
+                        .lineLimit(1)
+                }
+            }
+            
+            if !oscService.lastReceivedMessage.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Last OSC:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(oscService.lastReceivedMessage)
+                        .font(.caption.monospaced())
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding()
+        .frame(width: 280)
+    }
+}
+
+// MARK: - Save Scene Sheet
+
+struct SaveSceneSheet: View {
+    @Binding var sceneName: String
+    let onSave: () -> Void
+    let onCancel: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Save Scene")
+                .font(.headline)
+            
+            TextField("Scene Name", text: $sceneName)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 250)
+            
+            HStack(spacing: 16) {
+                Button("Cancel") {
+                    onCancel()
+                }
+                .keyboardShortcut(.escape)
+                
+                Button("Save") {
+                    onSave()
+                }
+                .keyboardShortcut(.return)
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(24)
+        .frame(width: 300)
+    }
+}
+
 // MARK: - Preview
 
 #Preview {
     MixerView()
         .environmentObject(AudioEngine())
         .environmentObject(MIDIService())
+        .environmentObject(OSCService())
+        .environmentObject(PresetStore())
         .frame(width: 1000, height: 500)
 }
