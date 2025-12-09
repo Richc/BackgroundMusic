@@ -90,6 +90,14 @@ enum ManateeColors {
     /// Divider
     static let divider = Color(nsColor: .separatorColor)
     
+    // MARK: - Routing Colors
+    
+    /// Accent green for active routes and positive indicators
+    static let accentGreen = Color(hue: 0.35, saturation: 0.75, brightness: 0.65)
+    
+    /// Route active indicator
+    static let routeActive = Color(hue: 0.35, saturation: 0.85, brightness: 0.70)
+    
     // MARK: - Helper Functions
     
     /// Convert linear amplitude to decibels

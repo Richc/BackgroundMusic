@@ -18,6 +18,62 @@ enum ChannelType: String, Codable, CaseIterable {
     case bus            // Submix bus
 }
 
+/// Represents a routing destination for inter-app audio routing
+struct AudioRoutingDestination: Identifiable, Hashable {
+    let id: UUID
+    let channelId: UUID           // Target channel ID
+    let channelName: String       // Display name of target
+    let inputChannel: Int         // Which input channel (0 = L/1, 1 = R/2, etc)
+    var isEnabled: Bool           // Is this route active
+    
+    init(channelId: UUID, channelName: String, inputChannel: Int, isEnabled: Bool = false) {
+        self.id = UUID()
+        self.channelId = channelId
+        self.channelName = channelName
+        self.inputChannel = inputChannel
+        self.isEnabled = isEnabled
+    }
+}
+
+/// Represents output routing configuration for a channel
+class AudioRouting: ObservableObject {
+    /// Send to master output (always true by default)
+    @Published var sendToMaster: Bool = true
+    
+    /// Routing destinations to other apps' inputs
+    /// Key: target channel ID, Value: array of input channel routes (L=0, R=1)
+    @Published var appRoutes: [UUID: [Int: Bool]] = [:]  // [targetChannelID: [inputChannel: enabled]]
+    
+    /// Check if this channel routes to a specific target
+    func isRoutedTo(channelId: UUID, inputChannel: Int = 0) -> Bool {
+        return appRoutes[channelId]?[inputChannel] ?? false
+    }
+    
+    /// Set routing to a specific target
+    func setRoute(to channelId: UUID, inputChannel: Int, enabled: Bool) {
+        if appRoutes[channelId] == nil {
+            appRoutes[channelId] = [:]
+        }
+        appRoutes[channelId]?[inputChannel] = enabled
+    }
+    
+    /// Get all active routes
+    var activeRoutes: [(channelId: UUID, inputChannel: Int)] {
+        var routes: [(UUID, Int)] = []
+        for (channelId, inputs) in appRoutes {
+            for (input, enabled) in inputs where enabled {
+                routes.append((channelId, input))
+            }
+        }
+        return routes
+    }
+    
+    /// Clear all routes to a specific channel
+    func clearRoutesTo(channelId: UUID) {
+        appRoutes.removeValue(forKey: channelId)
+    }
+}
+
 /// Represents a single audio channel with volume, mute, pan, and routing
 @MainActor
 final class AudioChannel: ObservableObject, Identifiable {
@@ -110,6 +166,18 @@ final class AudioChannel: ObservableObject, Identifiable {
     /// Output device UID this channel routes to
     @Published var outputDeviceUID: String?
     
+    /// Inter-app audio routing configuration
+    @Published var routing: AudioRouting = AudioRouting()
+    
+    /// Number of input channels this app supports (for apps like Ableton with multiple inputs)
+    @Published var inputChannelCount: Int = 2  // Default stereo
+    
+    /// Number of output channels this app has
+    @Published var outputChannelCount: Int = 2  // Default stereo
+    
+    /// Process ID for this app (if application type)
+    @Published var processId: pid_t = 0
+    
     // MARK: - Callbacks
     
     var onVolumeChanged: ((Float) -> Void)?
@@ -118,6 +186,7 @@ final class AudioChannel: ObservableObject, Identifiable {
     var onPanChanged: ((Float) -> Void)?
     var onTrimChanged: ((Float) -> Void)?
     var onEQChanged: ((Float, Float, Float) -> Void)?  // (low, mid, high) in dB
+    var onRoutingChanged: ((AudioRouting) -> Void)?     // Called when routing changes
     
     // MARK: - Initialization
     
@@ -126,13 +195,15 @@ final class AudioChannel: ObservableObject, Identifiable {
         channelType: ChannelType,
         identifier: String,
         name: String,
-        icon: NSImage? = nil
+        icon: NSImage? = nil,
+        processId: pid_t = 0
     ) {
         self.id = id
         self.channelType = channelType
         self.identifier = identifier
         self.name = name
         self.icon = icon
+        self.processId = processId
     }
     
     // MARK: - Convenience Initializers
@@ -143,7 +214,8 @@ final class AudioChannel: ObservableObject, Identifiable {
             channelType: .application,
             identifier: app.bundleIdentifier ?? app.processIdentifier.description,
             name: app.localizedName ?? "Unknown App",
-            icon: app.icon
+            icon: app.icon,
+            processId: app.processIdentifier
         )
         return channel
     }

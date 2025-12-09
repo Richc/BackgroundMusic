@@ -656,6 +656,76 @@ final class AudioEngine: ObservableObject {
         masterChannel?.isMuted = muted
     }
     
+    // MARK: - Audio Routing
+    
+    /// Set up routing from one channel to another's input
+    /// - Parameters:
+    ///   - source: The source channel sending audio
+    ///   - targetId: The UUID of the target channel to receive audio
+    ///   - inputChannel: Which input channel on the target (0 = L, 1 = R, etc.)
+    ///   - enabled: Whether this route is active
+    func setRouting(from source: AudioChannel, to targetId: UUID, inputChannel: Int, enabled: Bool) {
+        // Update the routing in the source channel's model
+        source.routing.setRoute(to: targetId, inputChannel: inputChannel, enabled: enabled)
+        
+        // Find the target channel
+        guard let targetChannel = channels.first(where: { $0.id == targetId }) else {
+            print("⚠️ AudioEngine.setRouting: Target channel not found for ID \(targetId)")
+            return
+        }
+        
+        print("🔀 AudioEngine.setRouting: \(source.name) -> \(targetChannel.name) ch\(inputChannel + 1) = \(enabled)")
+        
+        // Notify the routing callback if set
+        source.onRoutingChanged?(source.routing)
+        
+        // TODO: Send routing configuration to BGMDriver
+        // This would require driver-level support for inter-app audio routing
+        // For now, we'll just track the routing in the model
+        // The actual audio routing will need driver modifications
+        
+        if enabled {
+            print("   ✅ Route enabled: \(source.identifier) (pid: \(source.processId)) -> \(targetChannel.identifier) (pid: \(targetChannel.processId)) input \(inputChannel)")
+        } else {
+            print("   ❌ Route disabled: \(source.identifier) -> \(targetChannel.identifier) input \(inputChannel)")
+        }
+        
+        // Log current routing state
+        logRoutingState(for: source)
+    }
+    
+    /// Log the current routing state for debugging
+    private func logRoutingState(for channel: AudioChannel) {
+        let routes = channel.routing.activeRoutes
+        let toMaster = channel.routing.sendToMaster
+        
+        print("📊 Routing state for \(channel.name):")
+        print("   → Master: \(toMaster ? "✅" : "❌")")
+        
+        for route in routes {
+            if let target = channels.first(where: { $0.id == route.channelId }) {
+                print("   → \(target.name) input \(route.inputChannel + 1): ✅")
+            }
+        }
+        
+        if routes.isEmpty && toMaster {
+            print("   (Default: only to master)")
+        }
+    }
+    
+    /// Get all active routing destinations for a channel
+    func getActiveRoutes(for channel: AudioChannel) -> [(channel: AudioChannel, inputChannel: Int)] {
+        var result: [(AudioChannel, Int)] = []
+        
+        for route in channel.routing.activeRoutes {
+            if let target = channels.first(where: { $0.id == route.channelId }) {
+                result.append((target, route.inputChannel))
+            }
+        }
+        
+        return result
+    }
+    
     // MARK: - Channel Access
     
     /// Get channels for display (sorted appropriately)

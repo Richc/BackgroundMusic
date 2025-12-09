@@ -40,6 +40,10 @@ struct MixerView: View {
                                 isSelected: channel.id == selectedChannelID,
                                 onRemove: {
                                     audioEngine.removeManagedApp(bundleID: channel.identifier)
+                                },
+                                availableTargets: audioEngine.channels.filter { $0.channelType == .application },
+                                onRoutingChanged: { source, targetId, inputCh, enabled in
+                                    audioEngine.setRouting(from: source, to: targetId, inputChannel: inputCh, enabled: enabled)
                                 }
                             )
                             .onTapGesture {
@@ -323,8 +327,11 @@ struct ChannelStripView: View {
     @ObservedObject var channel: AudioChannel
     var isSelected: Bool = false
     var onRemove: (() -> Void)? = nil
+    var availableTargets: [AudioChannel] = []  // Other channels that can receive audio
+    var onRoutingChanged: ((AudioChannel, UUID, Int, Bool) -> Void)? = nil  // (source, targetId, inputCh, enabled)
     
     @State private var isHovering = false
+    @State private var showRoutingPopover = false
     
     private var isInactive: Bool {
         channel.channelType == .application && !channel.isActive
@@ -332,7 +339,7 @@ struct ChannelStripView: View {
     
     var body: some View {
         VStack(spacing: 6) {
-            // Icon and name with remove button
+            // Icon and name with remove button - now clickable for routing
             channelHeader
             
             // Per-channel 3-band EQ (where meters used to be)
@@ -400,36 +407,74 @@ struct ChannelStripView: View {
     
     private var channelHeader: some View {
         VStack(spacing: 4) {
-            ZStack {
-                if let icon = channel.icon {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .frame(width: 28, height: 28)
-                        .opacity(isInactive ? 0.5 : 1.0)
-                        .saturation(isInactive ? 0.3 : 1.0)
-                } else {
-                    Image(systemName: channel.channelType == .master ? "speaker.wave.3.fill" : "app.fill")
-                        .font(.system(size: 20))
-                        .foregroundColor(isInactive ? ManateeColors.textTertiary : ManateeColors.textSecondary)
+            // Clickable icon area for routing
+            Button(action: {
+                if channel.channelType == .application && !isInactive {
+                    showRoutingPopover = true
                 }
-                
-                // Inactive overlay badge
-                if isInactive {
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Spacer()
-                            Circle()
-                                .fill(Color.gray)
-                                .frame(width: 8, height: 8)
-                                .overlay(
-                                    Circle()
-                                        .stroke(ManateeColors.channelBackground, lineWidth: 1)
-                                )
-                        }
+            }) {
+                ZStack {
+                    // Highlight when has active routes
+                    if hasActiveRoutes {
+                        Circle()
+                            .fill(ManateeColors.accentGreen.opacity(0.2))
+                            .frame(width: 34, height: 34)
                     }
-                    .frame(width: 28, height: 28)
+                    
+                    if let icon = channel.icon {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .frame(width: 28, height: 28)
+                            .opacity(isInactive ? 0.5 : 1.0)
+                            .saturation(isInactive ? 0.3 : 1.0)
+                    } else {
+                        Image(systemName: channel.channelType == .master ? "speaker.wave.3.fill" : "app.fill")
+                            .font(.system(size: 20))
+                            .foregroundColor(isInactive ? ManateeColors.textTertiary : ManateeColors.textSecondary)
+                    }
+                    
+                    // Inactive overlay badge
+                    if isInactive {
+                        VStack {
+                            Spacer()
+                            HStack {
+                                Spacer()
+                                Circle()
+                                    .fill(Color.gray)
+                                    .frame(width: 8, height: 8)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(ManateeColors.channelBackground, lineWidth: 1)
+                                    )
+                            }
+                        }
+                        .frame(width: 28, height: 28)
+                    }
+                    
+                    // Routing indicator
+                    if hasActiveRoutes && !isInactive {
+                        VStack {
+                            Spacer()
+                            HStack {
+                                Circle()
+                                    .fill(ManateeColors.accentGreen)
+                                    .frame(width: 6, height: 6)
+                                Spacer()
+                            }
+                        }
+                        .frame(width: 28, height: 28)
+                    }
                 }
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showRoutingPopover, arrowEdge: .bottom) {
+                RoutingPopoverView(
+                    sourceChannel: channel,
+                    availableTargets: availableTargets.filter { $0.id != channel.id && $0.channelType == .application },
+                    onRoutingChanged: { targetId, inputCh, enabled in
+                        onRoutingChanged?(channel, targetId, inputCh, enabled)
+                    }
+                )
             }
             
             Text(channel.name)
@@ -438,6 +483,197 @@ struct ChannelStripView: View {
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
         }
+    }
+    
+    private var hasActiveRoutes: Bool {
+        !channel.routing.activeRoutes.isEmpty || !channel.routing.sendToMaster
+    }
+}
+
+// MARK: - Routing Popover View
+
+struct RoutingPopoverView: View {
+    @ObservedObject var sourceChannel: AudioChannel
+    let availableTargets: [AudioChannel]
+    let onRoutingChanged: (UUID, Int, Bool) -> Void  // (targetId, inputChannel, enabled)
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Header
+            HStack {
+                if let icon = sourceChannel.icon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 20, height: 20)
+                }
+                Text("Route Output From")
+                    .font(.headline)
+                Text(sourceChannel.name)
+                    .font(.headline)
+                    .foregroundColor(ManateeColors.accentGreen)
+            }
+            .padding(.bottom, 4)
+            
+            Divider()
+            
+            // Master output toggle
+            HStack {
+                Toggle(isOn: Binding(
+                    get: { sourceChannel.routing.sendToMaster },
+                    set: { newValue in
+                        sourceChannel.routing.sendToMaster = newValue
+                        sourceChannel.routing.objectWillChange.send()
+                    }
+                )) {
+                    HStack {
+                        Image(systemName: "speaker.wave.3.fill")
+                            .foregroundColor(ManateeColors.accentGreen)
+                        Text("Master Output")
+                            .fontWeight(.medium)
+                    }
+                }
+                .toggleStyle(.checkbox)
+            }
+            .padding(.vertical, 4)
+            
+            if !availableTargets.isEmpty {
+                Divider()
+                
+                Text("Send to App Inputs:")
+                    .font(.subheadline)
+                    .foregroundColor(ManateeColors.textSecondary)
+                
+                // List of available target apps
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(availableTargets) { target in
+                            RoutingTargetRow(
+                                sourceChannel: sourceChannel,
+                                targetChannel: target,
+                                onRoutingChanged: onRoutingChanged
+                            )
+                        }
+                    }
+                }
+                .frame(maxHeight: 200)
+            } else {
+                Text("No other apps available for routing")
+                    .font(.caption)
+                    .foregroundColor(ManateeColors.textTertiary)
+                    .padding(.vertical, 8)
+            }
+            
+            Divider()
+            
+            // Info text
+            Text("Route this app's audio to other app inputs for processing chains, or send to multiple destinations simultaneously.")
+                .font(.caption)
+                .foregroundColor(ManateeColors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(width: 300)
+    }
+}
+
+// MARK: - Routing Target Row
+
+struct RoutingTargetRow: View {
+    @ObservedObject var sourceChannel: AudioChannel
+    @ObservedObject var targetChannel: AudioChannel
+    let onRoutingChanged: (UUID, Int, Bool) -> Void
+    
+    @State private var isExpanded = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // App header with expand toggle
+            HStack {
+                Button(action: { isExpanded.toggle() }) {
+                    HStack {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 10))
+                            .foregroundColor(ManateeColors.textTertiary)
+                        
+                        if let icon = targetChannel.icon {
+                            Image(nsImage: icon)
+                                .resizable()
+                                .frame(width: 16, height: 16)
+                        }
+                        
+                        Text(targetChannel.name)
+                            .font(.system(size: 12, weight: .medium))
+                        
+                        Spacer()
+                        
+                        // Show active route indicator
+                        if hasAnyRouteToTarget {
+                            Circle()
+                                .fill(ManateeColors.accentGreen)
+                                .frame(width: 6, height: 6)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.vertical, 2)
+            
+            // Expanded channel routing options
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    // For stereo (2 channel) apps
+                    if targetChannel.inputChannelCount <= 2 {
+                        // Simple L/R routing
+                        HStack(spacing: 16) {
+                            routeToggle(label: "L → L", inputChannel: 0)
+                            routeToggle(label: "R → R", inputChannel: 1)
+                        }
+                        .padding(.leading, 20)
+                    } else {
+                        // Multi-channel apps (like Ableton 8in/8out)
+                        let channelPairs = stride(from: 0, to: targetChannel.inputChannelCount, by: 2)
+                        ForEach(Array(channelPairs), id: \.self) { pairStart in
+                            HStack(spacing: 16) {
+                                routeToggle(label: "→ \(pairStart + 1)", inputChannel: pairStart)
+                                if pairStart + 1 < targetChannel.inputChannelCount {
+                                    routeToggle(label: "→ \(pairStart + 2)", inputChannel: pairStart + 1)
+                                }
+                            }
+                            .padding(.leading, 20)
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+                .background(ManateeColors.channelBackground.opacity(0.3))
+                .cornerRadius(4)
+            }
+        }
+    }
+    
+    private func routeToggle(label: String, inputChannel: Int) -> some View {
+        let isEnabled = sourceChannel.routing.isRoutedTo(channelId: targetChannel.id, inputChannel: inputChannel)
+        
+        return Toggle(isOn: Binding(
+            get: { isEnabled },
+            set: { newValue in
+                sourceChannel.routing.setRoute(to: targetChannel.id, inputChannel: inputChannel, enabled: newValue)
+                sourceChannel.routing.objectWillChange.send()
+                onRoutingChanged(targetChannel.id, inputChannel, newValue)
+            }
+        )) {
+            Text(label)
+                .font(.system(size: 11, design: .monospaced))
+        }
+        .toggleStyle(.checkbox)
+    }
+    
+    private var hasAnyRouteToTarget: Bool {
+        for i in 0..<targetChannel.inputChannelCount {
+            if sourceChannel.routing.isRoutedTo(channelId: targetChannel.id, inputChannel: i) {
+                return true
+            }
+        }
+        return false
     }
 }
 
