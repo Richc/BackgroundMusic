@@ -1524,6 +1524,65 @@ void	BGM_Device::ApplyClientRelativeVolume(UInt32 inClientID, UInt32 inIOBufferF
     auto thePanPositionInt = mClients.GetClientPanPositionRT(inClientID);
     Float32 thePanPosition = static_cast<Float32>(thePanPositionInt) / 100.0f;
     
+    // Apply per-client 3-band EQ (before volume and pan)
+    BGM_Client* theClient = mClients.GetClientForEQRT(inClientID);
+    if (theClient != nullptr)
+    {
+        // Check if any EQ band is active (non-zero)
+        bool hasEQ = (theClient->mEQLowGain != 0.0f || 
+                      theClient->mEQMidGain != 0.0f || 
+                      theClient->mEQHighGain != 0.0f);
+        
+        if (hasEQ)
+        {
+            // Process each frame through the 3-band EQ (interleaved stereo)
+            for (UInt32 frame = 0; frame < inIOBufferFrameSize; frame++)
+            {
+                UInt32 L = frame * 2;
+                UInt32 R = L + 1;
+                
+                Float32 left = theBuffer[L];
+                Float32 right = theBuffer[R];
+                
+                // Low shelf filter
+                Float32 outL = theClient->mEQLowCoeffs[0] * left + theClient->mEQLowDelayL[0];
+                theClient->mEQLowDelayL[0] = theClient->mEQLowCoeffs[1] * left - theClient->mEQLowCoeffs[3] * outL + theClient->mEQLowDelayL[1];
+                theClient->mEQLowDelayL[1] = theClient->mEQLowCoeffs[2] * left - theClient->mEQLowCoeffs[4] * outL;
+                left = outL;
+                
+                Float32 outR = theClient->mEQLowCoeffs[0] * right + theClient->mEQLowDelayR[0];
+                theClient->mEQLowDelayR[0] = theClient->mEQLowCoeffs[1] * right - theClient->mEQLowCoeffs[3] * outR + theClient->mEQLowDelayR[1];
+                theClient->mEQLowDelayR[1] = theClient->mEQLowCoeffs[2] * right - theClient->mEQLowCoeffs[4] * outR;
+                right = outR;
+                
+                // Mid peak filter
+                outL = theClient->mEQMidCoeffs[0] * left + theClient->mEQMidDelayL[0];
+                theClient->mEQMidDelayL[0] = theClient->mEQMidCoeffs[1] * left - theClient->mEQMidCoeffs[3] * outL + theClient->mEQMidDelayL[1];
+                theClient->mEQMidDelayL[1] = theClient->mEQMidCoeffs[2] * left - theClient->mEQMidCoeffs[4] * outL;
+                left = outL;
+                
+                outR = theClient->mEQMidCoeffs[0] * right + theClient->mEQMidDelayR[0];
+                theClient->mEQMidDelayR[0] = theClient->mEQMidCoeffs[1] * right - theClient->mEQMidCoeffs[3] * outR + theClient->mEQMidDelayR[1];
+                theClient->mEQMidDelayR[1] = theClient->mEQMidCoeffs[2] * right - theClient->mEQMidCoeffs[4] * outR;
+                right = outR;
+                
+                // High shelf filter
+                outL = theClient->mEQHighCoeffs[0] * left + theClient->mEQHighDelayL[0];
+                theClient->mEQHighDelayL[0] = theClient->mEQHighCoeffs[1] * left - theClient->mEQHighCoeffs[3] * outL + theClient->mEQHighDelayL[1];
+                theClient->mEQHighDelayL[1] = theClient->mEQHighCoeffs[2] * left - theClient->mEQHighCoeffs[4] * outL;
+                left = outL;
+                
+                outR = theClient->mEQHighCoeffs[0] * right + theClient->mEQHighDelayR[0];
+                theClient->mEQHighDelayR[0] = theClient->mEQHighCoeffs[1] * right - theClient->mEQHighCoeffs[3] * outR + theClient->mEQHighDelayR[1];
+                theClient->mEQHighDelayR[1] = theClient->mEQHighCoeffs[2] * right - theClient->mEQHighCoeffs[4] * outR;
+                right = outR;
+                
+                theBuffer[L] = left;
+                theBuffer[R] = right;
+            }
+        }
+    }
+    
     // TODO When we get around to supporting devices with more than two channels it would be worth looking into
     //      kAudioFormatProperty_PanningMatrix and kAudioFormatProperty_BalanceFade in AudioFormat.h.
     

@@ -77,6 +77,23 @@ final class AudioChannel: ObservableObject, Identifiable {
         }
     }
     
+    // MARK: - Per-Channel EQ (-12 to +12 dB)
+    
+    /// Low band EQ gain (250 Hz shelf)
+    @Published var eqLowGain: Float = 0.0 {
+        didSet { onEQChanged?(eqLowGain, eqMidGain, eqHighGain) }
+    }
+    
+    /// Mid band EQ gain (1 kHz peak)
+    @Published var eqMidGain: Float = 0.0 {
+        didSet { onEQChanged?(eqLowGain, eqMidGain, eqHighGain) }
+    }
+    
+    /// High band EQ gain (4 kHz shelf)
+    @Published var eqHighGain: Float = 0.0 {
+        didSet { onEQChanged?(eqLowGain, eqMidGain, eqHighGain) }
+    }
+    
     // MARK: - Metering
     
     /// Current peak level for left channel (0.0 to 1.0+)
@@ -100,6 +117,7 @@ final class AudioChannel: ObservableObject, Identifiable {
     var onSoloChanged: ((Bool) -> Void)?
     var onPanChanged: ((Float) -> Void)?
     var onTrimChanged: ((Float) -> Void)?
+    var onEQChanged: ((Float, Float, Float) -> Void)?  // (low, mid, high) in dB
     
     // MARK: - Initialization
     

@@ -93,6 +93,10 @@ public:
     bool                                                GetClientRT(UInt32 inClientID, BGM_Client* outClient) const;
     bool                                                GetClientNonRT(UInt32 inClientID, BGM_Client* outClient) const;
     
+    // Returns a pointer to the actual client object for EQ processing (needs mutable access for filter state)
+    // Only call from RT threads. Returns nullptr if not found.
+    BGM_Client* _Nullable                               GetClientPtrRT(UInt32 inClientID) const;
+    
 private:
     static bool                                         GetClient(const std::map<UInt32, BGM_Client>& inClientMap,
                                                                   UInt32 inClientID,
@@ -137,6 +141,11 @@ public:
     bool                                                SetClientsPanPosition(pid_t inAppPID, SInt32 inPanPosition);
     // Returns true if a client for bundle ID inAppBundleID was found and its pan position changed.
     bool                                                SetClientsPanPosition(CACFString inAppBundleID, SInt32 inPanPosition);
+    
+    // Set per-client EQ gains and compute filter coefficients
+    // inLowGain, inMidGain, inHighGain are in dB (-12 to +12), or kAppEQGainNoValue to skip
+    bool                                                SetClientsEQ(pid_t inAppPID, Float32 inLowGain, Float32 inMidGain, Float32 inHighGain, Float64 inSampleRate);
+    bool                                                SetClientsEQ(CACFString inAppBundleID, Float32 inLowGain, Float32 inMidGain, Float32 inHighGain, Float64 inSampleRate);
     
     void                                                StartIONonRT(UInt32 inClientID) { UpdateClientIOStateNonRT(inClientID, true); }
     void                                                StopIONonRT(UInt32 inClientID) { UpdateClientIOStateNonRT(inClientID, false); }

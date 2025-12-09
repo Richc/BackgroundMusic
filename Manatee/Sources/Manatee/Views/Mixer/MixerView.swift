@@ -58,6 +58,12 @@ struct MixerView: View {
                 Divider()
                     .frame(height: 350)
                 
+                // EQ section (3-band)
+                EQSectionView()
+                
+                Divider()
+                    .frame(height: 350)
+                
                 // Master section
                 if let master = audioEngine.masterChannel {
                     MasterSectionView(channel: master)
@@ -325,20 +331,18 @@ struct ChannelStripView: View {
     }
     
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             // Icon and name with remove button
             channelHeader
             
-            // VU Meter
-            HStack(spacing: 2) {
-                VUMeterView(level: isInactive ? 0 : channel.peakLevelLeft)
-                VUMeterView(level: isInactive ? 0 : channel.peakLevelRight)
-            }
-            .frame(height: 120)
+            // Per-channel 3-band EQ (where meters used to be)
+            ChannelEQView(channel: channel)
+                .opacity(isInactive ? 0.5 : 1.0)
+                .allowsHitTesting(!isInactive)
             
             // Fader
-            FaderView(value: $channel.volume)
-                .frame(height: ManateeDimensions.faderHeight)
+            FaderView(value: $channel.volume, maxValue: 1.0)
+                .frame(height: ManateeDimensions.faderHeight + 40)
                 .opacity(isInactive ? 0.5 : 1.0)
                 .allowsHitTesting(!isInactive)
             
@@ -487,8 +491,8 @@ struct MasterSectionView: View {
             }
             .frame(height: 140)
             
-            // Fader
-            FaderView(value: $channel.volume)
+            // Fader (master keeps boost range)
+            FaderView(value: $channel.volume, maxValue: 1.5)
                 .frame(height: ManateeDimensions.faderHeight + 20)
             
             // Volume display
@@ -506,6 +510,284 @@ struct MasterSectionView: View {
         .frame(width: 100)
         .background(ManateeColors.channelBackground)
         .cornerRadius(ManateeDimensions.cornerRadius)
+    }
+}
+
+// MARK: - EQ Section View
+
+struct EQSectionView: View {
+    @EnvironmentObject var audioEngine: AudioEngine
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            Text("EQ")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(ManateeColors.brand)
+            
+            // High band (4 kHz+)
+            VStack(spacing: 2) {
+                EQKnobView(
+                    value: $audioEngine.eqHighGain,
+                    label: "HI",
+                    color: .cyan
+                )
+                Text(formatGain(audioEngine.eqHighGain))
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(ManateeColors.textSecondary)
+            }
+            
+            // Mid band (250 Hz - 4 kHz)
+            VStack(spacing: 2) {
+                EQKnobView(
+                    value: $audioEngine.eqMidGain,
+                    label: "MID",
+                    color: .yellow
+                )
+                Text(formatGain(audioEngine.eqMidGain))
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(ManateeColors.textSecondary)
+            }
+            
+            // Low band (<= 250 Hz)
+            VStack(spacing: 2) {
+                EQKnobView(
+                    value: $audioEngine.eqLowGain,
+                    label: "LO",
+                    color: .orange
+                )
+                Text(formatGain(audioEngine.eqLowGain))
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(ManateeColors.textSecondary)
+            }
+            
+            Spacer()
+            
+            // Reset button
+            Button("Reset") {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    audioEngine.eqLowGain = 0
+                    audioEngine.eqMidGain = 0
+                    audioEngine.eqHighGain = 0
+                }
+            }
+            .font(.system(size: 9))
+            .buttonStyle(.plain)
+            .foregroundColor(ManateeColors.textSecondary)
+        }
+        .padding(8)
+        .frame(width: 60)
+        .background(ManateeColors.channelBackground)
+        .cornerRadius(ManateeDimensions.cornerRadius)
+    }
+    
+    private func formatGain(_ gain: Float) -> String {
+        if abs(gain) < 0.1 { return "0 dB" }
+        let sign = gain > 0 ? "+" : ""
+        return "\(sign)\(String(format: "%.1f", gain))"
+    }
+}
+
+// MARK: - EQ Knob View
+
+struct EQKnobView: View {
+    @Binding var value: Float  // -12 to +12 dB
+    var label: String
+    var color: Color
+    
+    @State private var isDragging = false
+    @State private var dragStartValue: Float = 0
+    @State private var dragStartY: CGFloat = 0
+    
+    private let minValue: Float = -12
+    private let maxValue: Float = 12
+    
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(label)
+                .font(.system(size: 8, weight: .medium))
+                .foregroundColor(ManateeColors.textTertiary)
+            
+            GeometryReader { geometry in
+                let size = min(geometry.size.width, geometry.size.height)
+                let normalizedValue = (value - minValue) / (maxValue - minValue)
+                let rotation = -135 + Double(normalizedValue) * 270  // -135° to +135°
+                
+                ZStack {
+                    // Knob background
+                    Circle()
+                        .fill(Color(white: 0.15))
+                        .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                    
+                    // Value arc from center (0 dB) to current position
+                    if abs(value) > 0.5 {
+                        let centerTrim: CGFloat = 0.375  // Center position (0.75 * 0.5)
+                        let currentTrim = CGFloat(normalizedValue) * 0.75
+                        let fromTrim = min(centerTrim, currentTrim)
+                        let toTrim = max(centerTrim, currentTrim)
+                        
+                        Circle()
+                            .trim(from: fromTrim, to: toTrim)
+                            .stroke(
+                                color.opacity(isDragging ? 1.0 : 0.7),
+                                style: StrokeStyle(lineWidth: 3, lineCap: .round)
+                            )
+                            .rotationEffect(.degrees(135))
+                    }
+                    
+                    // Center line indicator
+                    Rectangle()
+                        .fill(Color.white)
+                        .frame(width: 2, height: size * 0.3)
+                        .offset(y: -size * 0.2)
+                        .rotationEffect(.degrees(rotation))
+                    
+                    // Center dot (indicates zero position)
+                    if abs(value) < 0.5 {
+                        Circle()
+                            .fill(color)
+                            .frame(width: 4, height: 4)
+                    }
+                }
+                .frame(width: size, height: size)
+                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                .contentShape(Circle())
+                .simultaneousGesture(
+                    TapGesture(count: 2)
+                        .onEnded {
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                value = 0
+                            }
+                        }
+                )
+                .gesture(
+                    DragGesture(minimumDistance: 5)
+                        .onChanged { gesture in
+                            if !isDragging {
+                                isDragging = true
+                                dragStartValue = value
+                                dragStartY = gesture.startLocation.y
+                            }
+                            
+                            let deltaY = dragStartY - gesture.location.y
+                            let sensitivity: Float = 0.15  // dB per point
+                            let newValue = dragStartValue + Float(deltaY) * sensitivity
+                            value = max(minValue, min(maxValue, newValue))
+                        }
+                        .onEnded { _ in
+                            isDragging = false
+                        }
+                )
+            }
+            .frame(width: 36, height: 36)
+        }
+    }
+}
+
+// MARK: - Channel EQ View (compact horizontal 3-band EQ for channel strips)
+
+struct ChannelEQView: View {
+    @ObservedObject var channel: AudioChannel
+    
+    var body: some View {
+        VStack(spacing: 2) {
+            // HI knob
+            MiniEQKnob(value: $channel.eqHighGain, label: "H", color: .cyan)
+            
+            // MID knob
+            MiniEQKnob(value: $channel.eqMidGain, label: "M", color: .yellow)
+            
+            // LO knob
+            MiniEQKnob(value: $channel.eqLowGain, label: "L", color: .orange)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Mini EQ Knob (compact version for channel strips)
+
+struct MiniEQKnob: View {
+    @Binding var value: Float  // -12 to +12 dB
+    var label: String
+    var color: Color
+    
+    @State private var isDragging = false
+    @State private var dragStartValue: Float = 0
+    @State private var dragStartY: CGFloat = 0
+    
+    private let minValue: Float = -12
+    private let maxValue: Float = 12
+    private let size: CGFloat = 24
+    
+    var body: some View {
+        HStack(spacing: 2) {
+            Text(label)
+                .font(.system(size: 7, weight: .medium))
+                .foregroundColor(ManateeColors.textTertiary)
+                .frame(width: 10)
+            
+            ZStack {
+                let normalizedValue = (value - minValue) / (maxValue - minValue)
+                let rotation = -135 + Double(normalizedValue) * 270
+                
+                // Knob background
+                Circle()
+                    .fill(Color(white: 0.15))
+                    .shadow(color: .black.opacity(0.2), radius: 1, y: 1)
+                
+                // Value arc from center (0 dB) to current position
+                // Center is at normalized 0.5, which maps to 0.375 in trim space (0.75 * 0.5)
+                // Arc goes from center to current value
+                if abs(value) > 0.5 {
+                    let centerTrim: CGFloat = 0.375  // 0.75 * 0.5 = center position
+                    let currentTrim = CGFloat(normalizedValue) * 0.75
+                    let fromTrim = min(centerTrim, currentTrim)
+                    let toTrim = max(centerTrim, currentTrim)
+                    
+                    Circle()
+                        .trim(from: fromTrim, to: toTrim)
+                        .stroke(
+                            color.opacity(0.7),
+                            style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(135))
+                }
+                
+                // Center line indicator
+                Rectangle()
+                    .fill(Color.white.opacity(0.9))
+                    .frame(width: 1.5, height: size * 0.3)
+                    .offset(y: -size * 0.18)
+                    .rotationEffect(.degrees(rotation))
+            }
+            .frame(width: size, height: size)
+            .contentShape(Circle())
+            .simultaneousGesture(
+                TapGesture(count: 2)
+                    .onEnded {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            value = 0
+                        }
+                    }
+            )
+            .gesture(
+                DragGesture(minimumDistance: 5)
+                    .onChanged { gesture in
+                        if !isDragging {
+                            isDragging = true
+                            dragStartValue = value
+                            dragStartY = gesture.startLocation.y
+                        }
+                        
+                        let deltaY = dragStartY - gesture.location.y
+                        let sensitivity: Float = 0.2
+                        let newValue = dragStartValue + Float(deltaY) * sensitivity
+                        value = max(minValue, min(maxValue, newValue))
+                    }
+                    .onEnded { _ in
+                        isDragging = false
+                    }
+            )
+        }
     }
 }
 
@@ -545,6 +827,7 @@ struct VUMeterView: View {
 
 struct FaderView: View {
     @Binding var value: Float
+    var maxValue: Float = 1.5  // 1.0 for app faders (no boost), 1.5 for master (with boost)
     
     @State private var isDragging = false
     @State private var dragStartValue: Float = 0
@@ -556,7 +839,7 @@ struct FaderView: View {
         GeometryReader { geometry in
             let height = geometry.size.height
             let width = geometry.size.width
-            let thumbPosition = height - (CGFloat(min(value / 1.5, 1.0)) * height)
+            let thumbPosition = height - (CGFloat(min(value / maxValue, 1.0)) * height)
             
             ZStack(alignment: .center) {
                 // Track background - centered
@@ -565,12 +848,14 @@ struct FaderView: View {
                     .frame(width: trackWidth, height: height)
                     .position(x: width / 2, y: height / 2)
                 
-                // Unity mark (0dB) - centered
-                let unityY = height - (CGFloat(1.0 / 1.5) * height)
-                Rectangle()
-                    .fill(Color.white.opacity(0.5))
-                    .frame(width: 20, height: 1)
-                    .position(x: width / 2, y: unityY)
+                // Unity mark (0dB) - centered (only show if there's boost range)
+                if maxValue > 1.0 {
+                    let unityY = height - (CGFloat(1.0 / maxValue) * height)
+                    Rectangle()
+                        .fill(Color.white.opacity(0.5))
+                        .frame(width: 20, height: 1)
+                        .position(x: width / 2, y: unityY)
+                }
                 
                 // Thumb - centered horizontally
                 RoundedRectangle(cornerRadius: ManateeDimensions.faderThumbCornerRadius)
@@ -586,8 +871,8 @@ struct FaderView: View {
                     .onChanged { gesture in
                         // Direct positioning - click/drag to move fader to that position
                         let newY = min(max(gesture.location.y, 0), height)
-                        let newValue = Float(1.0 - newY / height) * 1.5
-                        value = newValue
+                        let newValue = Float(1.0 - newY / height) * maxValue
+                        value = min(newValue, maxValue)  // Clamp to max
                         isDragging = true
                     }
                     .onEnded { _ in
@@ -618,6 +903,7 @@ struct KnobView: View {
         GeometryReader { geometry in
             let size = min(geometry.size.width, geometry.size.height)
             let normalizedValue = (value - range.lowerBound) / (range.upperBound - range.lowerBound)
+            let normalizedCenter = (centerValue - range.lowerBound) / (range.upperBound - range.lowerBound)
             let angle = Angle(degrees: Double(normalizedValue) * 270 - 135)
             
             ZStack {
@@ -625,11 +911,18 @@ struct KnobView: View {
                 Circle()
                     .stroke(ManateeColors.textTertiary, lineWidth: 2)
                 
-                // Value arc
-                Circle()
-                    .trim(from: 0, to: CGFloat(normalizedValue) * 0.75)
-                    .stroke(ManateeColors.brand, lineWidth: 2)
-                    .rotationEffect(.degrees(135))
+                // Value arc from center to current position
+                if abs(value - centerValue) > 0.01 {
+                    let centerTrim = CGFloat(normalizedCenter) * 0.75
+                    let currentTrim = CGFloat(normalizedValue) * 0.75
+                    let fromTrim = min(centerTrim, currentTrim)
+                    let toTrim = max(centerTrim, currentTrim)
+                    
+                    Circle()
+                        .trim(from: fromTrim, to: toTrim)
+                        .stroke(ManateeColors.brand, lineWidth: 2)
+                        .rotationEffect(.degrees(135))
+                }
                 
                 // Knob body
                 Circle()
@@ -648,7 +941,9 @@ struct KnobView: View {
                 TapGesture(count: 2)
                     .onEnded {
                         // Double-click to reset to center/default value
-                        value = centerValue
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            value = centerValue
+                        }
                     }
             )
             .gesture(

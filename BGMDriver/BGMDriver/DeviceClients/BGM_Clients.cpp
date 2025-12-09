@@ -310,6 +310,11 @@ SInt32 BGM_Clients::GetClientPanPositionRT(UInt32 inClientID) const
     return (didGetClient ? theClient.mPanPosition : kAppPanCenterRawValue);
 }
 
+BGM_Client* BGM_Clients::GetClientForEQRT(UInt32 inClientID) const
+{
+    return mClientMap.GetClientPtrRT(inClientID);
+}
+
 bool    BGM_Clients::SetClientsRelativeVolumes(const CACFArray inAppVolumes)
 {
     bool didChangeAppVolumes = false;
@@ -391,9 +396,57 @@ bool    BGM_Clients::SetClientsRelativeVolumes(const CACFArray inAppVolumes)
             }
         }
         
-        ThrowIf(!didGetVolume && !didGetPanPosition,
+        // Handle EQ settings (low, mid, high in dB from -12 to +12)
+        bool didGetEQ = false;
+        {
+            SInt32 theEQLow, theEQMid, theEQHigh;
+            bool hasLow = theAppVolume.GetSInt32(CFSTR(kBGMAppVolumesKey_EQLowGain), theEQLow);
+            bool hasMid = theAppVolume.GetSInt32(CFSTR(kBGMAppVolumesKey_EQMidGain), theEQMid);
+            bool hasHigh = theAppVolume.GetSInt32(CFSTR(kBGMAppVolumesKey_EQHighGain), theEQHigh);
+            
+            if (hasLow || hasMid || hasHigh) {
+                // Validate ranges (EQ is stored as SInt32 in 10ths of dB, -120 to 120)
+                if (hasLow) {
+                    ThrowIf(theEQLow < kAppEQGainMinRawValue || theEQLow > kAppEQGainMaxRawValue,
+                            BGM_InvalidClientRelativeVolumeException(),
+                            "BGM_Clients::SetClientsRelativeVolumes: EQ low gain out of valid range");
+                }
+                if (hasMid) {
+                    ThrowIf(theEQMid < kAppEQGainMinRawValue || theEQMid > kAppEQGainMaxRawValue,
+                            BGM_InvalidClientRelativeVolumeException(),
+                            "BGM_Clients::SetClientsRelativeVolumes: EQ mid gain out of valid range");
+                }
+                if (hasHigh) {
+                    ThrowIf(theEQHigh < kAppEQGainMinRawValue || theEQHigh > kAppEQGainMaxRawValue,
+                            BGM_InvalidClientRelativeVolumeException(),
+                            "BGM_Clients::SetClientsRelativeVolumes: EQ high gain out of valid range");
+                }
+                
+                // Convert from 10ths of dB to dB, use kAppEQGainNoValue for missing values
+                Float32 lowDB = hasLow ? static_cast<Float32>(theEQLow) / 10.0f : static_cast<Float32>(kAppEQGainNoValue);
+                Float32 midDB = hasMid ? static_cast<Float32>(theEQMid) / 10.0f : static_cast<Float32>(kAppEQGainNoValue);
+                Float32 highDB = hasHigh ? static_cast<Float32>(theEQHigh) / 10.0f : static_cast<Float32>(kAppEQGainNoValue);
+                
+                // Get sample rate from the device (default to 48kHz)
+                Float64 sampleRate = 48000.0;
+                
+                if(mClientMap.SetClientsEQ(theAppPID, lowDB, midDB, highDB, sampleRate))
+                {
+                    didChangeAppVolumes = true;
+                    didGetEQ = true;
+                }
+                
+                if(mClientMap.SetClientsEQ(theAppBundleID, lowDB, midDB, highDB, sampleRate))
+                {
+                    didChangeAppVolumes = true;
+                    didGetEQ = true;
+                }
+            }
+        }
+        
+        ThrowIf(!didGetVolume && !didGetPanPosition && !didGetEQ,
                 BGM_InvalidClientRelativeVolumeException(),
-                "BGM_Clients::SetClientsRelativeVolumes: No volume or pan position in request");
+                "BGM_Clients::SetClientsRelativeVolumes: No volume, pan position, or EQ in request");
     }
     
     return didChangeAppVolumes;

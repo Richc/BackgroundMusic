@@ -97,6 +97,10 @@ public:
     Float32                             GetClientRelativeVolumeRT(UInt32 inClientID) const;
     SInt32                              GetClientPanPositionRT(UInt32 inClientID) const;
     
+    // Get per-client EQ filter coefficients and delay states for RT processing
+    // Returns a pointer to the client's EQ data, or nullptr if not found
+    BGM_Client*                         GetClientForEQRT(UInt32 inClientID) const;
+    
     // Copies the current and past clients into an array in the format expected for
     // kAudioDeviceCustomPropertyAppVolumes. (Except that CACFArray and CACFDictionary are used instead
     // of unwrapped CFArray and CFDictionary refs.)

@@ -31,6 +31,10 @@
 #include "CACFDictionary.h"
 #include "CAException.h"
 
+// System Includes
+#include <climits>
+#include <cmath>
+
 
 #pragma clang assume_nonnull begin
 
@@ -130,6 +134,17 @@ bool    BGM_ClientMap::GetClientRT(UInt32 inClientID, BGM_Client* outClient) con
 {
     CAMutex::Locker theMapsLocker(mMapsMutex);
     return GetClient(mClientMap, inClientID, outClient);
+}
+
+BGM_Client* _Nullable BGM_ClientMap::GetClientPtrRT(UInt32 inClientID) const
+{
+    CAMutex::Locker theMapsLocker(mMapsMutex);
+    auto theClientItr = const_cast<std::map<UInt32, BGM_Client>&>(mClientMap).find(inClientID);
+    if(theClientItr != mClientMap.end())
+    {
+        return &theClientItr->second;
+    }
+    return nullptr;
 }
 
 bool    BGM_ClientMap::GetClientNonRT(UInt32 inClientID, BGM_Client* outClient) const
@@ -408,6 +423,132 @@ bool BGM_ClientMap::SetClientsPanPosition(CACFString searchKey, SInt32 inPanPosi
     theSetPansInShadowMapsFunc();
     
     return didChangePanPosition;
+}
+
+// Helper to compute biquad coefficients for EQ
+static void ComputeEQCoefficients(Float32 inGainDB, Float32 inFreq, Float64 inSampleRate, int filterType,
+                                   Float32* outCoeffs)
+{
+    // filterType: 0=low shelf, 1=parametric, 2=high shelf
+    // outCoeffs: [b0, b1, b2, a1, a2]
+    Float64 A = pow(10.0, inGainDB / 40.0);  // sqrt of linear gain
+    Float64 w0 = 2.0 * M_PI * inFreq / inSampleRate;
+    Float64 cosw0 = cos(w0);
+    Float64 sinw0 = sin(w0);
+    
+    Float64 b0, b1, b2, a0, a1, a2;
+    
+    if (filterType == 0) {
+        // Low shelf
+        Float64 S = 1.0;
+        Float64 alpha = sinw0 / 2.0 * sqrt((A + 1.0/A) * (1.0/S - 1.0) + 2.0);
+        Float64 sqrtA = sqrt(A);
+        
+        b0 = A * ((A + 1.0) - (A - 1.0) * cosw0 + 2.0 * sqrtA * alpha);
+        b1 = 2.0 * A * ((A - 1.0) - (A + 1.0) * cosw0);
+        b2 = A * ((A + 1.0) - (A - 1.0) * cosw0 - 2.0 * sqrtA * alpha);
+        a0 = (A + 1.0) + (A - 1.0) * cosw0 + 2.0 * sqrtA * alpha;
+        a1 = -2.0 * ((A - 1.0) + (A + 1.0) * cosw0);
+        a2 = (A + 1.0) + (A - 1.0) * cosw0 - 2.0 * sqrtA * alpha;
+    } else if (filterType == 2) {
+        // High shelf
+        Float64 S = 1.0;
+        Float64 alpha = sinw0 / 2.0 * sqrt((A + 1.0/A) * (1.0/S - 1.0) + 2.0);
+        Float64 sqrtA = sqrt(A);
+        
+        b0 = A * ((A + 1.0) + (A - 1.0) * cosw0 + 2.0 * sqrtA * alpha);
+        b1 = -2.0 * A * ((A - 1.0) + (A + 1.0) * cosw0);
+        b2 = A * ((A + 1.0) + (A - 1.0) * cosw0 - 2.0 * sqrtA * alpha);
+        a0 = (A + 1.0) - (A - 1.0) * cosw0 + 2.0 * sqrtA * alpha;
+        a1 = 2.0 * ((A - 1.0) - (A + 1.0) * cosw0);
+        a2 = (A + 1.0) - (A - 1.0) * cosw0 - 2.0 * sqrtA * alpha;
+    } else {
+        // Parametric (peaking) - wide Q for broad mid control
+        Float64 Q = 0.5;
+        Float64 alpha = sinw0 / (2.0 * Q);
+        
+        b0 = 1.0 + alpha * A;
+        b1 = -2.0 * cosw0;
+        b2 = 1.0 - alpha * A;
+        a0 = 1.0 + alpha / A;
+        a1 = -2.0 * cosw0;
+        a2 = 1.0 - alpha / A;
+    }
+    
+    // Normalize and output
+    outCoeffs[0] = static_cast<Float32>(b0 / a0);
+    outCoeffs[1] = static_cast<Float32>(b1 / a0);
+    outCoeffs[2] = static_cast<Float32>(b2 / a0);
+    outCoeffs[3] = static_cast<Float32>(a1 / a0);
+    outCoeffs[4] = static_cast<Float32>(a2 / a0);
+}
+
+bool BGM_ClientMap::SetClientsEQ(pid_t searchKey, Float32 inLowGain, Float32 inMidGain, Float32 inHighGain, Float64 inSampleRate)
+{
+    bool didChangeEQ = false;
+    
+    CAMutex::Locker theShadowMapsLocker(mShadowMapsMutex);
+    
+    auto theSetEQInShadowMapsFunc = [&] {
+        auto theClients = GetClients(searchKey);
+        if(theClients != nullptr) {
+            for(auto theClient: *theClients) {
+                if (inLowGain != kAppEQGainNoValue) {
+                    theClient->mEQLowGain = inLowGain;
+                    ComputeEQCoefficients(inLowGain, 250.0f, inSampleRate, 0, theClient->mEQLowCoeffs);
+                }
+                if (inMidGain != kAppEQGainNoValue) {
+                    theClient->mEQMidGain = inMidGain;
+                    ComputeEQCoefficients(inMidGain, 1000.0f, inSampleRate, 1, theClient->mEQMidCoeffs);
+                }
+                if (inHighGain != kAppEQGainNoValue) {
+                    theClient->mEQHighGain = inHighGain;
+                    ComputeEQCoefficients(inHighGain, 3000.0f, inSampleRate, 2, theClient->mEQHighCoeffs);
+                }
+                didChangeEQ = true;
+            }
+        }
+    };
+    
+    theSetEQInShadowMapsFunc();
+    SwapInShadowMaps();
+    theSetEQInShadowMapsFunc();
+    
+    return didChangeEQ;
+}
+
+bool BGM_ClientMap::SetClientsEQ(CACFString searchKey, Float32 inLowGain, Float32 inMidGain, Float32 inHighGain, Float64 inSampleRate)
+{
+    bool didChangeEQ = false;
+    
+    CAMutex::Locker theShadowMapsLocker(mShadowMapsMutex);
+    
+    auto theSetEQInShadowMapsFunc = [&] {
+        auto theClients = GetClients(searchKey);
+        if(theClients != nullptr) {
+            for(auto theClient: *theClients) {
+                if (inLowGain != kAppEQGainNoValue) {
+                    theClient->mEQLowGain = inLowGain;
+                    ComputeEQCoefficients(inLowGain, 200.0f, inSampleRate, 0, theClient->mEQLowCoeffs);
+                }
+                if (inMidGain != kAppEQGainNoValue) {
+                    theClient->mEQMidGain = inMidGain;
+                    ComputeEQCoefficients(inMidGain, 1000.0f, inSampleRate, 1, theClient->mEQMidCoeffs);
+                }
+                if (inHighGain != kAppEQGainNoValue) {
+                    theClient->mEQHighGain = inHighGain;
+                    ComputeEQCoefficients(inHighGain, 3000.0f, inSampleRate, 2, theClient->mEQHighCoeffs);
+                }
+                didChangeEQ = true;
+            }
+        }
+    };
+    
+    theSetEQInShadowMapsFunc();
+    SwapInShadowMaps();
+    theSetEQInShadowMapsFunc();
+    
+    return didChangeEQ;
 }
 
 void    BGM_ClientMap::UpdateClientIOStateNonRT(UInt32 inClientID, bool inDoingIO)

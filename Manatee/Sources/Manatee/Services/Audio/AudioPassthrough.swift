@@ -72,6 +72,158 @@ final class AudioRingBuffer {
     }
 }
 
+/// 3-Band EQ using biquad filters
+/// Low: Shelf filter at 250 Hz
+/// Mid: Peak filter at 1 kHz  
+/// High: Shelf filter at 4 kHz
+final class ThreeBandEQ {
+    // Filter coefficients for stereo (2 channels)
+    private var lowShelfCoeffs: [Double] = [1, 0, 0, 0, 0]  // b0, b1, b2, a1, a2
+    private var midPeakCoeffs: [Double] = [1, 0, 0, 0, 0]
+    private var highShelfCoeffs: [Double] = [1, 0, 0, 0, 0]
+    
+    // Filter delay states (2 delays per biquad section, per channel)
+    private var lowDelayL: [Double] = [0, 0]
+    private var lowDelayR: [Double] = [0, 0]
+    private var midDelayL: [Double] = [0, 0]
+    private var midDelayR: [Double] = [0, 0]
+    private var highDelayL: [Double] = [0, 0]
+    private var highDelayR: [Double] = [0, 0]
+    
+    // EQ parameters (gain in dB, -12 to +12)
+    var lowGain: Float = 0 { didSet { updateLowShelf() } }
+    var midGain: Float = 0 { didSet { updateMidPeak() } }
+    var highGain: Float = 0 { didSet { updateHighShelf() } }
+    
+    private var sampleRate: Double = 48000
+    
+    init(sampleRate: Double = 48000) {
+        self.sampleRate = sampleRate
+        updateAllFilters()
+    }
+    
+    func setSampleRate(_ rate: Double) {
+        sampleRate = rate
+        updateAllFilters()
+    }
+    
+    private func updateAllFilters() {
+        updateLowShelf()
+        updateMidPeak()
+        updateHighShelf()
+    }
+    
+    // Low shelf filter at 200 Hz
+    private func updateLowShelf() {
+        let freq = 200.0
+        let gain = Double(lowGain)
+        lowShelfCoeffs = calculateShelfCoefficients(freq: freq, gain: gain, isLowShelf: true)
+    }
+    
+    // Mid peak filter at 1 kHz (Q = 0.5 for wide bandwidth)
+    private func updateMidPeak() {
+        let freq = 1000.0
+        let gain = Double(midGain)
+        let Q = 0.5
+        midPeakCoeffs = calculatePeakCoefficients(freq: freq, gain: gain, Q: Q)
+    }
+    
+    // High shelf filter at 3 kHz
+    private func updateHighShelf() {
+        let freq = 3000.0
+        let gain = Double(highGain)
+        highShelfCoeffs = calculateShelfCoefficients(freq: freq, gain: gain, isLowShelf: false)
+    }
+    
+    // Calculate low/high shelf filter coefficients
+    private func calculateShelfCoefficients(freq: Double, gain: Double, isLowShelf: Bool) -> [Double] {
+        if abs(gain) < 0.1 { return [1, 0, 0, 0, 0] }  // Bypass if nearly flat
+        
+        let A = pow(10, gain / 40)  // Amplitude
+        let w0 = 2 * Double.pi * freq / sampleRate
+        let cosw0 = cos(w0)
+        let sinw0 = sin(w0)
+        let S = 1.0  // Shelf slope
+        let alpha = sinw0 / 2 * sqrt((A + 1/A) * (1/S - 1) + 2)
+        
+        var b0, b1, b2, a0, a1, a2: Double
+        
+        if isLowShelf {
+            b0 = A * ((A + 1) - (A - 1) * cosw0 + 2 * sqrt(A) * alpha)
+            b1 = 2 * A * ((A - 1) - (A + 1) * cosw0)
+            b2 = A * ((A + 1) - (A - 1) * cosw0 - 2 * sqrt(A) * alpha)
+            a0 = (A + 1) + (A - 1) * cosw0 + 2 * sqrt(A) * alpha
+            a1 = -2 * ((A - 1) + (A + 1) * cosw0)
+            a2 = (A + 1) + (A - 1) * cosw0 - 2 * sqrt(A) * alpha
+        } else {
+            b0 = A * ((A + 1) + (A - 1) * cosw0 + 2 * sqrt(A) * alpha)
+            b1 = -2 * A * ((A - 1) + (A + 1) * cosw0)
+            b2 = A * ((A + 1) + (A - 1) * cosw0 - 2 * sqrt(A) * alpha)
+            a0 = (A + 1) - (A - 1) * cosw0 + 2 * sqrt(A) * alpha
+            a1 = 2 * ((A - 1) - (A + 1) * cosw0)
+            a2 = (A + 1) - (A - 1) * cosw0 - 2 * sqrt(A) * alpha
+        }
+        
+        // Normalize
+        return [b0/a0, b1/a0, b2/a0, a1/a0, a2/a0]
+    }
+    
+    // Calculate peak (parametric) filter coefficients
+    private func calculatePeakCoefficients(freq: Double, gain: Double, Q: Double) -> [Double] {
+        if abs(gain) < 0.1 { return [1, 0, 0, 0, 0] }  // Bypass if nearly flat
+        
+        let A = pow(10, gain / 40)
+        let w0 = 2 * Double.pi * freq / sampleRate
+        let cosw0 = cos(w0)
+        let sinw0 = sin(w0)
+        let alpha = sinw0 / (2 * Q)
+        
+        let b0 = 1 + alpha * A
+        let b1 = -2 * cosw0
+        let b2 = 1 - alpha * A
+        let a0 = 1 + alpha / A
+        let a1 = -2 * cosw0
+        let a2 = 1 - alpha / A
+        
+        return [b0/a0, b1/a0, b2/a0, a1/a0, a2/a0]
+    }
+    
+    // Process a single sample through a biquad filter
+    @inline(__always)
+    private func processBiquad(_ input: Double, coeffs: [Double], delay: inout [Double]) -> Double {
+        let output = coeffs[0] * input + delay[0]
+        delay[0] = coeffs[1] * input - coeffs[3] * output + delay[1]
+        delay[1] = coeffs[2] * input - coeffs[4] * output
+        return output
+    }
+    
+    // Process interleaved stereo buffer in-place
+    func process(_ buffer: UnsafeMutablePointer<Float>, frameCount: Int, channelCount: Int) {
+        guard channelCount >= 2 else { return }
+        
+        for frame in 0..<frameCount {
+            let leftIdx = frame * channelCount
+            let rightIdx = leftIdx + 1
+            
+            var left = Double(buffer[leftIdx])
+            var right = Double(buffer[rightIdx])
+            
+            // Apply all three bands in series
+            left = processBiquad(left, coeffs: lowShelfCoeffs, delay: &lowDelayL)
+            right = processBiquad(right, coeffs: lowShelfCoeffs, delay: &lowDelayR)
+            
+            left = processBiquad(left, coeffs: midPeakCoeffs, delay: &midDelayL)
+            right = processBiquad(right, coeffs: midPeakCoeffs, delay: &midDelayR)
+            
+            left = processBiquad(left, coeffs: highShelfCoeffs, delay: &highDelayL)
+            right = processBiquad(right, coeffs: highShelfCoeffs, delay: &highDelayR)
+            
+            buffer[leftIdx] = Float(left)
+            buffer[rightIdx] = Float(right)
+        }
+    }
+}
+
 /// Audio passthrough context - holds all state needed by IO procs
 /// Stored as a separate class to avoid issues with Swift object layout in C callbacks
 final class PassthroughContext {
@@ -84,9 +236,17 @@ final class PassthroughContext {
     /// System volume (from BGMDevice volume control or keyboard) - applied during output
     var systemVolume: Float = 1.0
     
-    init(bufferSize: Int) {
+    /// Peak levels for meters (updated atomically from audio thread)
+    var peakLevelLeft: Float = 0
+    var peakLevelRight: Float = 0
+    
+    /// 3-band EQ processor
+    let eq: ThreeBandEQ
+    
+    init(bufferSize: Int, sampleRate: Double = 48000) {
         // Ring buffer holds samples (frames * channels)
         self.ringBuffer = AudioRingBuffer(capacity: bufferSize)
+        self.eq = ThreeBandEQ(sampleRate: sampleRate)
     }
 }
 
@@ -158,7 +318,7 @@ final class AudioPassthrough {
         // Create context with ring buffer sized for ~100ms latency
         // Ring buffer holds samples (frames * channels)
         let ringBufferSamples = Int(bgmFormat.mSampleRate) * Int(bgmFormat.mChannelsPerFrame) / 10 // 100ms
-        context = PassthroughContext(bufferSize: max(ringBufferSamples, 48000))
+        context = PassthroughContext(bufferSize: max(ringBufferSamples, 48000), sampleRate: bgmFormat.mSampleRate)
         context?.channelCount = bgmFormat.mChannelsPerFrame
         context?.isActive = true
         
@@ -246,6 +406,43 @@ final class AudioPassthrough {
     var systemVolume: Float {
         context?.systemVolume ?? 1.0
     }
+    
+    /// Get and reset peak levels for meters
+    /// Returns (left, right) peak levels in 0.0-1.0 range
+    func getPeakLevelsAndReset() -> (left: Float, right: Float) {
+        guard let ctx = context else { return (0, 0) }
+        
+        let left = ctx.peakLevelLeft
+        let right = ctx.peakLevelRight
+        
+        // Reset for next measurement
+        ctx.peakLevelLeft = 0
+        ctx.peakLevelRight = 0
+        
+        return (left, right)
+    }
+    
+    // MARK: - 3-Band EQ Control
+    
+    /// Set low band gain (-12 to +12 dB)
+    func setEQLowGain(_ gain: Float) {
+        context?.eq.lowGain = max(-12, min(12, gain))
+    }
+    
+    /// Set mid band gain (-12 to +12 dB)
+    func setEQMidGain(_ gain: Float) {
+        context?.eq.midGain = max(-12, min(12, gain))
+    }
+    
+    /// Set high band gain (-12 to +12 dB)
+    func setEQHighGain(_ gain: Float) {
+        context?.eq.highGain = max(-12, min(12, gain))
+    }
+    
+    /// Get current EQ gains
+    var eqLowGain: Float { context?.eq.lowGain ?? 0 }
+    var eqMidGain: Float { context?.eq.midGain ?? 0 }
+    var eqHighGain: Float { context?.eq.highGain ?? 0 }
     
     /// Stop audio passthrough
     func stop() {
@@ -350,6 +547,12 @@ private func passthroughOutputIOProc(
     // Read from ring buffer
     _ = context.ringBuffer.read(floatData, count: sampleCount)
     
+    let channelCount = Int(context.channelCount)
+    let frameCount = sampleCount / max(1, channelCount)
+    
+    // Apply 3-band EQ
+    context.eq.process(floatData, frameCount: frameCount, channelCount: channelCount)
+    
     // Apply system volume (from keyboard volume keys)
     let volume = context.systemVolume
     if volume < 0.999 {  // Only process if not at unity
@@ -357,6 +560,26 @@ private func passthroughOutputIOProc(
             floatData[i] *= volume
         }
     }
+    
+    // Calculate peak levels for meters (interleaved stereo: L R L R L R...)
+    var peakL: Float = 0
+    var peakR: Float = 0
+    
+    for frame in 0..<frameCount {
+        let baseIndex = frame * channelCount
+        if channelCount >= 1 {
+            let sampleL = abs(floatData[baseIndex])
+            if sampleL > peakL { peakL = sampleL }
+        }
+        if channelCount >= 2 {
+            let sampleR = abs(floatData[baseIndex + 1])
+            if sampleR > peakR { peakR = sampleR }
+        }
+    }
+    
+    // Update context peak levels (simple max, will be decayed on read)
+    if peakL > context.peakLevelLeft { context.peakLevelLeft = peakL }
+    if peakR > context.peakLevelRight { context.peakLevelRight = peakR }
     
     return noErr
 }

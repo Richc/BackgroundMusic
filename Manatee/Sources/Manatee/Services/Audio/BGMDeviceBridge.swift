@@ -26,9 +26,15 @@ enum BGMDeviceProperty: AudioObjectPropertySelector {
 }
 
 /// Volume range constants (from BGM_Types.h)
+/// NOTE: The driver applies a curve where raw 50 = 0dB (unity), raw 100 = boost
+/// The curve is: scalar = ConvertRawToScalar(raw) * 4, so:
+///   raw 0   = -96dB (silence)
+///   raw 50  = ~0dB (unity, scalar ≈ 1.0)
+///   raw 100 = +6dB (boost, scalar ≈ 2.0)
 struct BGMVolumeConstants {
     static let maxRawValue: Int32 = 100
     static let minRawValue: Int32 = 0
+    static let unityRawValue: Int32 = 50  // 0dB = unity gain
     static let minDbValue: Float = -96.0
     static let maxDbValue: Float = 0.0
     
@@ -43,6 +49,10 @@ struct BGMAppVolumeKeys {
     static let panPosition = "ppos"
     static let processID = "pid"
     static let bundleID = "bid"
+    // EQ gain keys (values are in 10ths of dB, so -12dB = -120)
+    static let eqLowGain = "eqlo"
+    static let eqMidGain = "eqmi"
+    static let eqHighGain = "eqhi"
 }
 
 /// Manatee Device UID constants (must match BGM_Types.h)
@@ -51,6 +61,43 @@ struct BGMDeviceUIDs {
     static let uiSounds = "ManateeDevice_UISounds"
     static let nullDevice = "ManateeNullDevice"
 }
+
+/// Maps parent app bundle IDs to their helper process bundle IDs
+/// When setting volume for a parent app, we also set volume for its helpers
+private let responsibleBundleIDs: [String: [String]] = [
+    // Finder
+    "com.apple.finder": ["com.apple.quicklook.ui.helper", "com.apple.quicklook.QuickLookUIService"],
+    // Safari
+    "com.apple.Safari": ["com.apple.WebKit.WebContent"],
+    // Firefox
+    "org.mozilla.firefox": ["org.mozilla.plugincontainer"],
+    // Firefox Nightly
+    "org.mozilla.nightly": ["org.mozilla.plugincontainer"],
+    // VMWare Fusion
+    "com.vmware.fusion": ["com.vmware.vmware-vmx"],
+    // Parallels
+    "com.parallels.desktop.console": ["com.parallels.vm"],
+    // MPlayer OSX Extended
+    "hu.mplayerhq.mplayerosx.extended": ["ch.sttz.mplayerosx.extended.binaries.officialsvn"],
+    // Discord
+    "com.hnc.Discord": ["com.hnc.Discord.helper"],
+    // Skype
+    "com.skype.skype": ["com.skype.skype.Helper"],
+    // Google Chrome
+    "com.google.Chrome": ["com.google.Chrome.helper"],
+    // Microsoft Edge
+    "com.microsoft.edgemac": ["com.microsoft.edgemac.helper"],
+    // Arc
+    "company.thebrowser.Browser": ["company.thebrowser.browser.helper"],
+    // Brave
+    "com.brave.Browser": ["com.brave.Browser.helper"],
+    // Slack
+    "com.tinyspeck.slackmacgap": ["com.tinyspeck.slackmacgap.helper"],
+    // Spotify (Electron-based)
+    "com.spotify.client": ["com.spotify.client.helper"],
+    // VS Code
+    "com.microsoft.VSCode": ["com.microsoft.VSCode.helper"],
+]
 
 /// Bridge to communicate with the Manatee virtual audio device
 @MainActor
@@ -73,14 +120,15 @@ final class BGMDeviceBridge: ObservableObject {
     // MARK: - Types
     
     struct AppVolumeData {
-        var volume: Int32  // 0-100
+        var volume: Int32  // 0-50 for 0-100% (raw 50 = 0dB unity)
         var pan: Int32     // -100 to 100
         var processID: pid_t?
         var bundleID: String?
         
         /// Volume as normalized float (0.0 to 1.0)
+        /// Raw 50 = 0dB (unity) = 1.0
         var normalizedVolume: Float {
-            Float(volume) / Float(BGMVolumeConstants.maxRawValue)
+            Float(volume) / Float(BGMVolumeConstants.unityRawValue)
         }
         
         /// Pan as normalized float (-1.0 to 1.0)
@@ -205,24 +253,39 @@ final class BGMDeviceBridge: ObservableObject {
             return
         }
         
-        // Convert 0-1 to 0-100 raw value
-        let rawVolume = Int32(max(0, min(1, volume)) * Float(BGMVolumeConstants.maxRawValue))
+        // Convert 0-1 to 0-50 raw value (0dB = unity at raw 50)
+        // volume 0.0 = raw 0 (silence), volume 1.0 = raw 50 (0dB unity)
+        let rawVolume = Int32(max(0, min(1, volume)) * Float(BGMVolumeConstants.unityRawValue))
         
         print("🎚️ BGMDeviceBridge.setVolume: \(bundleID) -> \(Int(volume * 100))% (raw: \(rawVolume))")
         
+        // Set volume for the main app
         setAppVolumeProperty(
             volume: rawVolume,
             pan: nil,
             processID: pid,
             bundleID: bundleID
         )
+        
+        // Also set volume for helper processes (e.g., browser helpers for YouTube audio)
+        if let helperBundleIDs = responsibleBundleIDs[bundleID] {
+            for helperBundleID in helperBundleIDs {
+                print("🎚️ BGMDeviceBridge.setVolume: Also setting helper \(helperBundleID) -> \(Int(volume * 100))%")
+                setAppVolumeProperty(
+                    volume: rawVolume,
+                    pan: nil,
+                    processID: -1,  // We don't know the helper PID
+                    bundleID: helperBundleID
+                )
+            }
+        }
     }
     
     /// Set volume for an app by process ID
     func setVolume(_ volume: Float, forProcessID pid: pid_t) {
         guard isAvailable else { return }
         
-        let rawVolume = Int32(max(0, min(1, volume)) * Float(BGMVolumeConstants.maxRawValue))
+        let rawVolume = Int32(max(0, min(1, volume)) * Float(BGMVolumeConstants.unityRawValue))
         
         setAppVolumeProperty(
             volume: rawVolume,
@@ -247,12 +310,25 @@ final class BGMDeviceBridge: ObservableObject {
         
         print("🎚️ BGMDeviceBridge.setPan: \(bundleID) -> \(Int(pan * 100)) (raw: \(rawPan))")
         
+        // Set pan for the main app
         setAppVolumeProperty(
             volume: nil,
             pan: rawPan,
             processID: pid,
             bundleID: bundleID
         )
+        
+        // Also set pan for helper processes
+        if let helperBundleIDs = responsibleBundleIDs[bundleID] {
+            for helperBundleID in helperBundleIDs {
+                setAppVolumeProperty(
+                    volume: nil,
+                    pan: rawPan,
+                    processID: -1,
+                    bundleID: helperBundleID
+                )
+            }
+        }
     }
     
     /// Get current volume for an app
@@ -449,6 +525,61 @@ final class BGMDeviceBridge: ObservableObject {
                     }
                 }
             }
+        }
+    }
+    
+    /// Set per-app 3-band EQ
+    /// - Parameters:
+    ///   - lowDB: Low band gain in dB (-12 to +12)
+    ///   - midDB: Mid band gain in dB (-12 to +12)
+    ///   - highDB: High band gain in dB (-12 to +12)
+    ///   - processID: The app's process ID
+    ///   - bundleID: The app's bundle identifier
+    func setAppEQ(lowDB: Float, midDB: Float, highDB: Float, processID: pid_t, bundleID: String?) {
+        guard deviceID != kAudioObjectUnknown else {
+            print("⚠️ BGMDeviceBridge: Cannot set EQ - device not connected")
+            return
+        }
+        
+        var address = AudioObjectPropertyAddress(
+            mSelector: BGMDeviceProperty.appVolumes.rawValue,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        // Build the dictionary with proper CF types
+        let cfDict = NSMutableDictionary()
+        cfDict[BGMAppVolumeKeys.processID] = NSNumber(value: processID)
+        cfDict[BGMAppVolumeKeys.bundleID] = (bundleID ?? "") as NSString
+        
+        // Convert dB to raw value (10ths of dB)
+        let lowRaw = Int32(lowDB * 10.0)
+        let midRaw = Int32(midDB * 10.0)
+        let highRaw = Int32(highDB * 10.0)
+        
+        cfDict[BGMAppVolumeKeys.eqLowGain] = NSNumber(value: lowRaw)
+        cfDict[BGMAppVolumeKeys.eqMidGain] = NSNumber(value: midRaw)
+        cfDict[BGMAppVolumeKeys.eqHighGain] = NSNumber(value: highRaw)
+        
+        print("🎛️ BGMDeviceBridge: Setting EQ - pid: \(processID), bundleID: \(bundleID ?? "nil"), L: \(lowDB)dB, M: \(midDB)dB, H: \(highDB)dB")
+        
+        let cfArray: CFArray = [cfDict] as CFArray
+        var cfTypeRef: CFTypeRef = cfArray
+        let dataSize = UInt32(MemoryLayout<CFTypeRef>.size)
+        
+        let status = AudioObjectSetPropertyData(
+            deviceID,
+            &address,
+            0,
+            nil,
+            dataSize,
+            &cfTypeRef
+        )
+        
+        if status != noErr {
+            print("❌ BGMDeviceBridge: Failed to set app EQ, status: \(status) (\(fourCharCodeToString(status)))")
+        } else {
+            print("✅ BGMDeviceBridge: Successfully set EQ for \(bundleID ?? "unknown")")
         }
     }
     

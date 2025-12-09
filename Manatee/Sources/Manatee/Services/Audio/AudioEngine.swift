@@ -43,6 +43,18 @@ final class AudioEngine: ObservableObject {
     /// Is BackgroundMusic driver available
     @Published var isBGMDriverAvailable: Bool = false
     
+    // MARK: - EQ State (3-band: Low/Mid/High, -12 to +12 dB)
+    
+    @Published var eqLowGain: Float = 0 {
+        didSet { AudioPassthrough.shared.setEQLowGain(eqLowGain) }
+    }
+    @Published var eqMidGain: Float = 0 {
+        didSet { AudioPassthrough.shared.setEQMidGain(eqMidGain) }
+    }
+    @Published var eqHighGain: Float = 0 {
+        didSet { AudioPassthrough.shared.setEQHighGain(eqHighGain) }
+    }
+    
     // MARK: - Private
     
     private var deviceListenerBlock: AudioObjectPropertyListenerBlock?
@@ -189,7 +201,20 @@ final class AudioEngine: ObservableObject {
         selectedOutputDevice = device
         print("🔊 Selected output device: \(device.name)")
         
-        // TODO: Route audio through this device
+        // Restart passthrough with the new output device
+        if isBGMDriverAvailable {
+            AudioPassthrough.shared.stop()
+            let passthroughStarted = AudioPassthrough.shared.start(
+                bgmDevice: bgmBridge.deviceID,
+                outputDevice: device.audioObjectID
+            )
+            if passthroughStarted {
+                print("✅ Audio passthrough restarted to \(device.name)")
+            } else {
+                print("⚠️ Failed to restart audio passthrough to \(device.name)")
+                errorMessage = "Failed to switch audio output"
+            }
+        }
     }
     
     func selectInputDevice(_ device: AudioDevice) {
@@ -395,6 +420,9 @@ final class AudioEngine: ObservableObject {
         channel.onPanChanged = { [weak self] pan in
             self?.setAppPan(bundleID: bundleID, pan: pan)
         }
+        channel.onEQChanged = { [weak self] lowDB, midDB, highDB in
+            self?.setAppEQ(bundleID: bundleID, lowDB: lowDB, midDB: midDB, highDB: highDB)
+        }
         
         // Try to get current volume from driver
         if isBGMDriverAvailable {
@@ -447,19 +475,33 @@ final class AudioEngine: ObservableObject {
     }
     
     private func updateMeters() {
-        // TODO: Get actual audio levels from the driver
-        // For now, simulate some activity
-        for channel in channels where !channel.isMuted {
-            // Decay existing levels
-            channel.peakLevelLeft = max(0, channel.peakLevelLeft * 0.9)
-            channel.peakLevelRight = max(0, channel.peakLevelRight * 0.9)
-            
-            // Add some random activity for active channels
-            if channel.isActive {
-                let noise = Float.random(in: 0...0.3)
-                channel.peakLevelLeft = min(1.0, channel.peakLevelLeft + noise * channel.volume)
-                channel.peakLevelRight = min(1.0, channel.peakLevelRight + noise * channel.volume)
+        // Get actual audio levels from the passthrough
+        let peaks = AudioPassthrough.shared.getPeakLevelsAndReset()
+        
+        // Smooth attack, faster decay constants
+        let attack: Float = 0.7  // How fast to rise
+        let decay: Float = 0.85  // How fast to fall
+        
+        // Update master channel with real levels
+        if let master = masterChannel {
+            if peaks.left > master.peakLevelLeft {
+                master.peakLevelLeft = master.peakLevelLeft * (1 - attack) + peaks.left * attack
+            } else {
+                master.peakLevelLeft = master.peakLevelLeft * decay
             }
+            
+            if peaks.right > master.peakLevelRight {
+                master.peakLevelRight = master.peakLevelRight * (1 - attack) + peaks.right * attack
+            } else {
+                master.peakLevelRight = master.peakLevelRight * decay
+            }
+        }
+        
+        // For app channels, we don't have per-app audio levels from the driver
+        // Just decay any existing levels to zero - meters only show on master
+        for channel in channels where channel.channelType == .application {
+            channel.peakLevelLeft = max(0, channel.peakLevelLeft * decay)
+            channel.peakLevelRight = max(0, channel.peakLevelRight * decay)
         }
     }
     
@@ -544,6 +586,26 @@ final class AudioEngine: ObservableObject {
             setAppPan(bundleID: bundleID, pid: app.processIdentifier, pan: pan)
         } else {
             print("⚠️ AudioEngine.setAppPan: App not found for \(bundleID)")
+        }
+    }
+    
+    /// Set per-app 3-band EQ
+    func setAppEQ(bundleID: String, pid: pid_t, lowDB: Float, midDB: Float, highDB: Float) {
+        guard isBGMDriverAvailable else {
+            print("⚠️ Cannot set EQ - BGMDriver not available")
+            return
+        }
+        
+        print("🎛️ AudioEngine.setAppEQ: \(bundleID) (pid: \(pid)) -> L:\(lowDB)dB M:\(midDB)dB H:\(highDB)dB")
+        bgmBridge.setAppEQ(lowDB: lowDB, midDB: midDB, highDB: highDB, processID: pid, bundleID: bundleID)
+    }
+    
+    /// Set per-app 3-band EQ (convenience method that looks up PID)
+    func setAppEQ(bundleID: String, lowDB: Float, midDB: Float, highDB: Float) {
+        if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
+            setAppEQ(bundleID: bundleID, pid: app.processIdentifier, lowDB: lowDB, midDB: midDB, highDB: highDB)
+        } else {
+            print("⚠️ AudioEngine.setAppEQ: App not found for \(bundleID)")
         }
     }
     

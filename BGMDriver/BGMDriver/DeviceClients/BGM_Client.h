@@ -75,6 +75,26 @@ public:
     // The client's pan position, in the range [-100, 100] where -100 is left and 100 is right
     SInt32                        mPanPosition = 0;
     
+    // Per-client 3-band EQ gains in dB, range [-12, 12], default 0 (no change)
+    // Low: 250 Hz shelf, Mid: 1 kHz peak, High: 4 kHz shelf
+    Float32                       mEQLowGain = 0.0f;
+    Float32                       mEQMidGain = 0.0f;
+    Float32                       mEQHighGain = 0.0f;
+    
+    // EQ biquad filter coefficients (computed from gains)
+    // Format: [b0, b1, b2, a1, a2] for each band
+    Float32                       mEQLowCoeffs[5] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    Float32                       mEQMidCoeffs[5] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    Float32                       mEQHighCoeffs[5] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    
+    // EQ filter delay states per channel (L/R)
+    Float32                       mEQLowDelayL[2] = {0.0f, 0.0f};
+    Float32                       mEQLowDelayR[2] = {0.0f, 0.0f};
+    Float32                       mEQMidDelayL[2] = {0.0f, 0.0f};
+    Float32                       mEQMidDelayR[2] = {0.0f, 0.0f};
+    Float32                       mEQHighDelayL[2] = {0.0f, 0.0f};
+    Float32                       mEQHighDelayR[2] = {0.0f, 0.0f};
+    
 };
 
 #pragma clang assume_nonnull end

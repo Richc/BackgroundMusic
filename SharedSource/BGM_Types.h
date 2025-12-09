@@ -153,6 +153,11 @@ enum BGMDeviceAudibleState : SInt32
 #define kBGMAppVolumesKey_ProcessID         "pid"
 // The app's bundle ID as a CFString. May be omitted if kBGMAppVolumesKey_ProcessID is present.
 #define kBGMAppVolumesKey_BundleID          "bid"
+// Per-app 3-band EQ gains in dB (-12 to +12). Optional keys.
+// Low band (250 Hz shelf), Mid band (1 kHz peak), High band (4 kHz shelf)
+#define kBGMAppVolumesKey_EQLowGain         "eqlo"
+#define kBGMAppVolumesKey_EQMidGain         "eqmi"
+#define kBGMAppVolumesKey_EQHighGain        "eqhi"
 
 // Volume curve range for app volumes
 #define kAppRelativeVolumeMaxRawValue   100
@@ -165,6 +170,12 @@ enum BGMDeviceAudibleState : SInt32
 #define kAppPanCenterRawValue 0
 #define kAppPanRightRawValue  100
 #define kAppPanNoValue INT_MIN
+
+// EQ gain values (raw = dB * 10, so -120 to +120 for -12dB to +12dB)
+#define kAppEQGainMinRawValue -120
+#define kAppEQGainMaxRawValue 120
+#define kAppEQGainCenterRawValue 0
+#define kAppEQGainNoValue INT_MIN
 
 // kAudioDeviceCustomPropertyEnabledOutputControls indices
 enum
