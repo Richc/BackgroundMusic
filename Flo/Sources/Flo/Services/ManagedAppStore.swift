@@ -91,8 +91,16 @@ final class ManagedAppStore: ObservableObject {
     func availableAppsToAdd() -> [NSRunningApplication] {
         let managedBundleIDs = Set(managedApps.map { $0.bundleID })
         
+        // Apps that should always be available even if they'd normally be filtered
+        let alwaysAllowedApps = ["com.apple.finder"]
+        
         return NSWorkspace.shared.runningApplications.filter { app in
             guard let bundleID = app.bundleIdentifier else { return false }
+            
+            // Always allow specific apps like Finder
+            if alwaysAllowedApps.contains(bundleID) {
+                return !managedBundleIDs.contains(bundleID)
+            }
             
             // Skip apps without UI, system apps, and already managed apps
             guard app.activationPolicy == .regular,
@@ -178,7 +186,7 @@ final class ManagedAppStore: ObservableObject {
             "com.apple.systempreferences",
             "com.apple.loginwindow",
             "com.apple.dock",
-            "com.apple.finder",  // Keep Finder as optional
+            // Finder can play audio (Quick Look, preview) so it's allowed
             "com.apple.controlcenter",
             "com.apple.notificationcenterui"
         ]

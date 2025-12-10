@@ -144,10 +144,13 @@ final class PresetStore: ObservableObject {
     // MARK: - Scenes
     
     func saveScene(_ scene: MixerScene) {
+        print("💾 PresetStore.saveScene: Saving '\(scene.name)' with \(scene.channelStates.count) channel states")
         if let index = scenes.firstIndex(where: { $0.id == scene.id }) {
             scenes[index] = scene
+            print("💾 Updated existing scene at index \(index)")
         } else {
             scenes.append(scene)
+            print("💾 Added new scene, total scenes: \(scenes.count)")
         }
         persistScenes()
     }
@@ -222,8 +225,9 @@ final class PresetStore: ObservableObject {
         do {
             let data = try JSONEncoder().encode(scenes)
             try data.write(to: scenesURL)
+            print("💾 PresetStore.persistScenes: Saved \(scenes.count) scenes to \(scenesURL.path)")
         } catch {
-            print("Failed to save scenes: \(error)")
+            print("❌ Failed to save scenes: \(error)")
         }
     }
     

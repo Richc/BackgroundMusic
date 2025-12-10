@@ -19,8 +19,8 @@ struct MixerView: View {
     @State private var showingControlSettings = false
     @State private var showingSaveScene = false
     @State private var newSceneName = ""
-    @State private var currentBank = 0
-    @State private var channelsPerBank = 8
+    @State private var channelsMutedBySolo: Set<UUID> = []  // Track channels muted by solo
+    @State private var currentSoloedChannelID: UUID? = nil  // Track which channel is currently soloed
     
     var body: some View {
         VStack(spacing: 0) {
@@ -44,6 +44,44 @@ struct MixerView: View {
                                 availableTargets: audioEngine.channels.filter { $0.channelType == .application },
                                 onRoutingChanged: { source, targetId, inputCh, enabled in
                                     audioEngine.setRouting(from: source, to: targetId, inputChannel: inputCh, enabled: enabled)
+                                },
+                                onSoloChanged: { isSoloed in
+                                    if isSoloed {
+                                        // If another channel was soloed, unsolo it first
+                                        if let previousSoloID = currentSoloedChannelID, previousSoloID != channel.id {
+                                            if let previousChannel = audioEngine.channels.first(where: { $0.id == previousSoloID }) {
+                                                previousChannel.isSoloed = false
+                                            }
+                                        }
+                                        
+                                        // Clear previous solo mute tracking
+                                        channelsMutedBySolo.removeAll()
+                                        
+                                        // Unmute the soloed channel (in case it was muted)
+                                        channel.isMuted = false
+                                        
+                                        // Mute all other app channels
+                                        for otherChannel in audioEngine.channels {
+                                            if otherChannel.id != channel.id && otherChannel.channelType == .application {
+                                                if !otherChannel.isMuted {
+                                                    channelsMutedBySolo.insert(otherChannel.id)
+                                                }
+                                                otherChannel.isMuted = true
+                                            }
+                                        }
+                                        
+                                        // Track which channel is now soloed
+                                        currentSoloedChannelID = channel.id
+                                    } else {
+                                        // Un-solo: unmute only the channels that were muted by solo
+                                        for otherChannel in audioEngine.channels {
+                                            if channelsMutedBySolo.contains(otherChannel.id) {
+                                                otherChannel.isMuted = false
+                                            }
+                                        }
+                                        channelsMutedBySolo.removeAll()
+                                        currentSoloedChannelID = nil
+                                    }
                                 }
                             )
                             .onTapGesture {
@@ -111,17 +149,7 @@ struct MixerView: View {
     // MARK: - Visible Channels
     
     private var visibleChannels: [AudioChannel] {
-        let appChannels = audioEngine.channels.filter { $0.channelType == .application }
-        let startIndex = currentBank * channelsPerBank
-        let endIndex = min(startIndex + channelsPerBank, appChannels.count)
-        
-        guard startIndex < appChannels.count else { return [] }
-        return Array(appChannels[startIndex..<endIndex])
-    }
-    
-    private var totalBanks: Int {
-        let appCount = audioEngine.channels.filter { $0.channelType == .application }.count
-        return max(1, Int(ceil(Double(appCount) / Double(channelsPerBank))))
+        audioEngine.channels.filter { $0.channelType == .application }
     }
     
     // MARK: - Control Protocol Status
@@ -193,74 +221,6 @@ struct MixerView: View {
             
             Text("Flo")
                 .font(.headline)
-            
-            Spacer()
-            
-            // Scene selector
-            Menu {
-                if presetStore.scenes.isEmpty {
-                    Text("No scenes saved")
-                        .foregroundColor(.secondary)
-                } else {
-                    ForEach(presetStore.scenes) { scene in
-                        Button {
-                            Task {
-                                await presetStore.recallScene(scene, to: audioEngine)
-                            }
-                        } label: {
-                            HStack {
-                                Text("Scene \(scene.index + 1): \(scene.name)")
-                                if presetStore.currentScene?.id == scene.id {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
-                    }
-                }
-                Divider()
-                Button("Save Current as Scene...") {
-                    showingSaveScene = true
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "square.stack.3d.up")
-                    if let current = presetStore.currentScene {
-                        Text(current.name)
-                    } else {
-                        Text("Scene")
-                    }
-                }
-            }
-            .menuStyle(.borderlessButton)
-            .frame(width: 140)
-            
-            Divider()
-                .frame(height: 20)
-            
-            // Bank navigation
-            HStack(spacing: 4) {
-                Button {
-                    if currentBank > 0 {
-                        currentBank -= 1
-                    }
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .disabled(currentBank == 0)
-                
-                Text("Bank \(currentBank + 1)/\(totalBanks)")
-                    .font(.caption)
-                    .frame(width: 70)
-                
-                Button {
-                    if currentBank < totalBanks - 1 {
-                        currentBank += 1
-                    }
-                } label: {
-                    Image(systemName: "chevron.right")
-                }
-                .disabled(currentBank >= totalBanks - 1)
-            }
             
             Spacer()
             
@@ -348,6 +308,7 @@ struct ChannelStripView: View {
     var onRemove: (() -> Void)? = nil
     var availableTargets: [AudioChannel] = []  // Other channels that can receive audio
     var onRoutingChanged: ((AudioChannel, UUID, Int, Bool) -> Void)? = nil  // (source, targetId, inputCh, enabled)
+    var onSoloChanged: ((Bool) -> Void)? = nil  // Called when solo button is toggled (true = soloed)
     
     @State private var isHovering = false
     @State private var showRoutingPopover = false
@@ -403,6 +364,7 @@ struct ChannelStripView: View {
                 
                 Button("S") {
                     channel.isSoloed.toggle()
+                    onSoloChanged?(channel.isSoloed)
                 }
                 .buttonStyle(SoloButtonStyle(isActive: channel.isSoloed))
                 .disabled(isInactive)
