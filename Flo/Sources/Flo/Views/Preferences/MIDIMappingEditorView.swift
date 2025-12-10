@@ -256,13 +256,18 @@ struct MIDIMappingEditorView: View {
     private func mappableControls(for category: MappableCategory) -> [MappableControl] {
         switch category {
         case .master:
-            return [
+            var controls = [
                 MappableControl(target: .masterVolume, name: "Master Volume", icon: "speaker.wave.3"),
                 MappableControl(target: .masterMute, name: "Master Mute", icon: "speaker.slash"),
                 MappableControl(target: .eqLow, name: "EQ Low", icon: "dial.low"),
                 MappableControl(target: .eqMid, name: "EQ Mid", icon: "dial.medium"),
                 MappableControl(target: .eqHigh, name: "EQ High", icon: "dial.high"),
             ]
+            // Add crossfader if enabled
+            if CrossfaderStore.shared.isEnabled {
+                controls.append(MappableControl(target: .crossfader, name: "Crossfader", icon: "slider.horizontal.below.rectangle"))
+            }
+            return controls
             
         case .apps:
             // Get running apps from AudioEngine

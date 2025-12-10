@@ -181,6 +181,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Bank navigation - could be implemented for MIDI controller banks
             break
             
+        case .crossfader:
+            // Crossfader control - convert 0-1 to -1 to +1
+            let position = (value * 2) - 1
+            CrossfaderStore.shared.setPosition(position)
+            print("🎚️ Crossfader position: \(String(format: "%.2f", position))")
+            
         case .custom:
             // Custom actions not yet implemented
             break

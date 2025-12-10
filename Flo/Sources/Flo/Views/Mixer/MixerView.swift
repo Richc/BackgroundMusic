@@ -12,6 +12,7 @@ struct MixerView: View {
     @EnvironmentObject var midiService: MIDIService
     @EnvironmentObject var oscService: OSCService
     @EnvironmentObject var presetStore: PresetStore
+    @ObservedObject var crossfaderStore = CrossfaderStore.shared
     
     @State private var selectedChannelID: UUID?
     @State private var showingPreferences = false
@@ -108,8 +109,15 @@ struct MixerView: View {
                 
                 // Master section
                 if let master = audioEngine.masterChannel {
-                    MasterSectionView(channel: master)
-                        .padding(.horizontal, 8)
+                    VStack(spacing: 8) {
+                        MasterSectionView(channel: master)
+                        
+                        // Crossfader (hidden feature)
+                        if crossfaderStore.isEnabled {
+                            CrossfaderView(crossfaderStore: crossfaderStore)
+                        }
+                    }
+                    .padding(.horizontal, 8)
                 }
             }
             .padding(.vertical, 8)
@@ -239,6 +247,7 @@ struct MixerView: View {
                 }
             }
             .buttonStyle(.plain)
+            .floTooltip("MIDI & OSC settings")
             .popover(isPresented: $showingControlSettings) {
                 ControlSettingsPopover()
                     .environmentObject(midiService)
@@ -251,6 +260,7 @@ struct MixerView: View {
                 Image(systemName: "gear")
             }
             .buttonStyle(.plain)
+            .floTooltip("Mixer preferences")
             .popover(isPresented: $showingPreferences) {
                 MixerSettingsPopoverView()
                     .environmentObject(audioEngine)
@@ -338,6 +348,7 @@ struct ChannelStripView: View {
                 .opacity(isInactive ? 0.5 : 1.0)
                 .allowsHitTesting(!isInactive)
                 .zIndex(1)
+                .floTooltip("🎚️ Pump up the volume!")
             
             // Volume display
             Text(channel.volumeDBFormatted)
@@ -349,6 +360,7 @@ struct ChannelStripView: View {
                 .frame(width: FloDimensions.knobDiameter, height: FloDimensions.knobDiameter)
                 .opacity(isInactive ? 0.5 : 1.0)
                 .allowsHitTesting(!isInactive)
+                .floTooltip("👈 Pan left or right 👉")
             
             Text("Pan")
                 .font(.system(size: 8))
@@ -361,6 +373,7 @@ struct ChannelStripView: View {
                 }
                 .buttonStyle(MuteButtonStyle(isActive: channel.isMuted))
                 .disabled(isInactive)
+                .floTooltip("🤫 Shhhh! Mute this channel")
                 
                 Button("S") {
                     channel.isSoloed.toggle()
@@ -368,6 +381,7 @@ struct ChannelStripView: View {
                 }
                 .buttonStyle(SoloButtonStyle(isActive: channel.isSoloed))
                 .disabled(isInactive)
+                .floTooltip("🎤 Solo time! Hear only this")
             }
             .opacity(isInactive ? 0.5 : 1.0)
         }
@@ -388,6 +402,7 @@ struct ChannelStripView: View {
                 }
                 .buttonStyle(.plain)
                 .padding(4)
+                .floTooltip("Remove from mixer")
             }
         }
     }
@@ -955,6 +970,7 @@ struct AddAppButton: View {
             .frame(maxHeight: .infinity)
         }
         .buttonStyle(.plain)
+        .floTooltip("Add an app to the mixer!")
     }
 }
 
@@ -978,11 +994,13 @@ struct MasterSectionView: View {
                     .frame(width: 12)
             }
             .frame(height: 140)
+            .floTooltip("📊 Watch those levels bounce!")
             
             // Fader (master keeps boost range)
             FaderView(value: $channel.volume, maxValue: 1.5)
                 .frame(height: FloDimensions.faderHeight + 20)
                 .zIndex(1)  // Ensure fader stays below other elements
+                .floTooltip("👑 Master volume rules all!")
             
             // Volume display
             Text(channel.volumeDBFormatted)
@@ -994,6 +1012,7 @@ struct MasterSectionView: View {
                 channel.isMuted.toggle()
             }
             .buttonStyle(MuteButtonStyle(isActive: channel.isMuted))
+            .floTooltip("🔇 Silence everything!")
         }
         .padding(12)
         .frame(width: 100)
@@ -1026,6 +1045,7 @@ struct EQSectionView: View {
                     label: "HI",
                     color: .cyan
                 )
+                .floTooltip("✨ Sparkle up the highs!")
                 Text(formatGain(audioEngine.eqHighGain))
                     .font(.system(size: 8, design: .monospaced))
                     .foregroundColor(FloColors.textSecondary)
@@ -1038,6 +1058,7 @@ struct EQSectionView: View {
                     label: "MID",
                     color: .yellow
                 )
+                .floTooltip("🎸 Punch those mids!")
                 Text(formatGain(audioEngine.eqMidGain))
                     .font(.system(size: 8, design: .monospaced))
                     .foregroundColor(FloColors.textSecondary)
@@ -1050,6 +1071,7 @@ struct EQSectionView: View {
                     label: "LO",
                     color: .orange
                 )
+                .floTooltip("🔊 Bring the bass!")
                 Text(formatGain(audioEngine.eqLowGain))
                     .font(.system(size: 8, design: .monospaced))
                     .foregroundColor(FloColors.textSecondary)
@@ -1068,6 +1090,7 @@ struct EQSectionView: View {
             .font(.system(size: 9))
             .buttonStyle(.plain)
             .foregroundColor(FloColors.textSecondary)
+            .floTooltip("🔄 Start fresh!")
         }
         .padding(8)
         .frame(width: 60)
@@ -1187,12 +1210,15 @@ struct ChannelEQView: View {
         VStack(spacing: 2) {
             // HI knob
             MiniEQKnob(value: $channel.eqHighGain, label: "H", color: .cyan)
+                .floTooltip("✨ Tweak the highs")
             
             // MID knob
             MiniEQKnob(value: $channel.eqMidGain, label: "M", color: .yellow)
+                .floTooltip("🎸 Shape the mids")
             
             // LO knob
             MiniEQKnob(value: $channel.eqLowGain, label: "L", color: .orange)
+                .floTooltip("🔊 Control the lows")
         }
         .padding(.vertical, 4)
     }

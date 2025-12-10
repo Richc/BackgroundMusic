@@ -12,6 +12,8 @@ struct SettingsView: View {
     @State private var selectedProfile: String = ""
     @State private var profiles: [String] = ["Default", "Profile 1", "Profile 2"]
     
+    @ObservedObject private var crossfaderStore = CrossfaderStore.shared
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             Text("Settings")
@@ -28,6 +30,12 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
             }
+            
+            Divider()
+            
+            // Crossfader toggle
+            Toggle("Enable Crossfader", isOn: $crossfaderStore.isEnabled)
+                .help("Shows a DJ-style crossfader below the master section to fade between two apps")
             
             Divider()
             

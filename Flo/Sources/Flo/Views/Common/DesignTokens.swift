@@ -282,10 +282,83 @@ struct SoloButtonStyle: ButtonStyle {
     }
 }
 
+// MARK: - Conditional Tooltip Modifier
+
+struct ConditionalTooltip: ViewModifier {
+    let tooltip: String
+    @AppStorage("showTooltips") private var showTooltips = false
+    @State private var isHovering = false
+    
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering in
+                if showTooltips {
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        isHovering = hovering
+                    }
+                }
+            }
+            .overlay(alignment: .top) {
+                if showTooltips && isHovering {
+                    TooltipBubble(text: tooltip)
+                        .offset(y: -44)
+                        .zIndex(9999)
+                        .allowsHitTesting(false)
+                }
+            }
+    }
+}
+
+// MARK: - Tooltip Bubble View
+
+struct TooltipBubble: View {
+    let text: String
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            Text(text)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color(red: 1.0, green: 0.4, blue: 0.6))  // Hot pink
+                        .shadow(color: .black.opacity(0.4), radius: 4, y: 2)
+                )
+            
+            // Speech bubble tail
+            Triangle()
+                .fill(Color(red: 1.0, green: 0.4, blue: 0.6))
+                .frame(width: 14, height: 8)
+                .offset(y: -1)
+        }
+        .fixedSize()
+    }
+}
+
+// MARK: - Triangle Shape for Speech Bubble
+
+struct Triangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.closeSubpath()
+        return path
+    }
+}
+
 // MARK: - View Extensions
 
 extension View {
     func channelStripStyle(isSelected: Bool = false, isInactive: Bool = false) -> some View {
         modifier(ChannelStripStyle(isSelected: isSelected, isInactive: isInactive))
+    }
+    
+    /// Shows a tooltip only when "Show Tooltips" is enabled in settings
+    func floTooltip(_ tooltip: String) -> some View {
+        modifier(ConditionalTooltip(tooltip: tooltip))
     }
 }

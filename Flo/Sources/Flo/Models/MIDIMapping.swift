@@ -41,6 +41,7 @@ enum ControlTarget: Codable, Hashable {
     case eqLow
     case eqMid
     case eqHigh
+    case crossfader
     case sceneRecall(index: Int)
     case presetRecall(name: String)
     case bankNext
@@ -60,6 +61,7 @@ enum ControlTarget: Codable, Hashable {
         case .eqLow: return "EQ Low"
         case .eqMid: return "EQ Mid"
         case .eqHigh: return "EQ High"
+        case .crossfader: return "Crossfader"
         case .sceneRecall(let index): return "Scene \(index)"
         case .presetRecall(let name): return "Preset: \(name)"
         case .bankNext: return "Bank Next"

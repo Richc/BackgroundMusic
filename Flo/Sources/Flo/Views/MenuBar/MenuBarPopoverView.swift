@@ -300,6 +300,11 @@ struct GeneralSettingsContent: View {
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("showInDock") private var showInDock = false
     @AppStorage("colorScheme") private var colorScheme = "system"
+    @AppStorage("showTooltips") private var showTooltips = true
+    @ObservedObject private var crossfaderStore = CrossfaderStore.shared
+    @State private var isOptionKeyPressed = false
+    @State private var localMonitor: Any?
+    @State private var globalMonitor: Any?
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -317,9 +322,46 @@ struct GeneralSettingsContent: View {
             }
             .pickerStyle(.segmented)
             
+            Divider()
+            
+            Text("Help")
+                .font(.headline)
+            Toggle("Show Tooltips", isOn: $showTooltips)
+                .help("Display helpful tooltips when hovering over controls")
+            
+            // Crossfader option - only visible when Option key is held
+            if isOptionKeyPressed {
+                Divider()
+                
+                Toggle("Enable Crossfader", isOn: $crossfaderStore.isEnabled)
+                    .help("Shows a DJ-style crossfader to fade between two apps")
+            }
+            
             Spacer()
         }
         .padding(16)
+        .onAppear {
+            // Check current state immediately
+            isOptionKeyPressed = NSEvent.modifierFlags.contains(.option)
+            
+            // Monitor for Option key - use both local and global monitors
+            localMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                isOptionKeyPressed = event.modifierFlags.contains(.option)
+                return event
+            }
+            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { event in
+                isOptionKeyPressed = event.modifierFlags.contains(.option)
+            }
+        }
+        .onDisappear {
+            // Clean up monitors
+            if let monitor = localMonitor {
+                NSEvent.removeMonitor(monitor)
+            }
+            if let monitor = globalMonitor {
+                NSEvent.removeMonitor(monitor)
+            }
+        }
     }
 }
 
@@ -408,9 +450,17 @@ struct AudioSettingsContent: View {
 struct AboutSettingsContent: View {
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "waveform.circle.fill")
-                .font(.system(size: 64))
-                .foregroundColor(.accentColor)
+            // Flo logo
+            if let logoImage = loadFloLogo() {
+                Image(nsImage: logoImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 128, height: 128)
+            } else {
+                Image(systemName: "drop.fill")
+                    .font(.system(size: 128))
+                    .foregroundColor(.accentColor)
+            }
             
             Text("Flo")
                 .font(.title)
@@ -419,18 +469,40 @@ struct AboutSettingsContent: View {
             Text("Version 1.0.0")
                 .foregroundColor(.secondary)
             
-            Text("Audio control for macOS")
+            Text("Audio Flo control for macOS")
                 .foregroundColor(.secondary)
             
             Divider()
             
-            Text("© 2024 Flo Audio")
+            Text("© 2025 Happy Manatee")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            Text("www.happymanatee.co.uk")
                 .font(.caption)
                 .foregroundColor(.secondary)
             
             Spacer()
         }
         .padding(16)
+    }
+    
+    private func loadFloLogo() -> NSImage? {
+        // Try SPM bundle first (for debug builds)
+        if let resourceBundle = Bundle.main.url(forResource: "Flo_Flo", withExtension: "bundle"),
+           let bundle = Bundle(url: resourceBundle),
+           let imageURL = bundle.url(forResource: "FloLogo", withExtension: "png"),
+           let image = NSImage(contentsOf: imageURL) {
+            return image
+        }
+        
+        // Try main bundle
+        if let imageURL = Bundle.main.url(forResource: "FloLogo", withExtension: "png"),
+           let image = NSImage(contentsOf: imageURL) {
+            return image
+        }
+        
+        return nil
     }
 }
 
