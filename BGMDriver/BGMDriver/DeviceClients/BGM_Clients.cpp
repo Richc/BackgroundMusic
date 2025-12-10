@@ -452,3 +452,342 @@ bool    BGM_Clients::SetClientsRelativeVolumes(const CACFArray inAppVolumes)
     return didChangeAppVolumes;
 }
 
+#pragma mark App Routing
+
+bool    BGM_Clients::SetRoute(pid_t inSourcePID, pid_t inDestPID, Float32 inGain, bool inEnabled)
+{
+    CAMutex::Locker theLocker(mMutex);
+    
+    // Look for existing route
+    for(auto& route : mRoutes)
+    {
+        if(route.mSourcePID == inSourcePID && route.mDestPID == inDestPID)
+        {
+            // Update existing route
+            bool changed = (route.mGain != inGain || route.mEnabled != inEnabled);
+            route.mGain = inGain;
+            route.mEnabled = inEnabled;
+            
+            // If disabling, we could clean up routing buffers, but keep them for quick re-enable
+            
+            return changed;
+        }
+    }
+    
+    // Add new route
+    if(inEnabled)
+    {
+        BGM_AudioRoute newRoute;
+        newRoute.mSourcePID = inSourcePID;
+        newRoute.mDestPID = inDestPID;
+        newRoute.mGain = inGain;
+        newRoute.mEnabled = inEnabled;
+        mRoutes.push_back(newRoute);
+        
+        // Allocate routing buffer for source client
+        mClientMap.AllocateRoutingBufferForPID(inSourcePID);
+        
+        DebugMsg("BGM_Clients::SetRoute: Added route from PID %d to PID %d, gain=%.2f",
+                 inSourcePID, inDestPID, inGain);
+        
+        return true;
+    }
+    
+    return false;
+}
+
+CFArrayRef  BGM_Clients::CopyRoutesAsArray() const
+{
+    CAMutex::Locker theLocker(mMutex);
+    
+    CFMutableArrayRef routesArray = CFArrayCreateMutable(kCFAllocatorDefault, 
+                                                          static_cast<CFIndex>(mRoutes.size()),
+                                                          &kCFTypeArrayCallBacks);
+    if(!routesArray)
+    {
+        return nullptr;
+    }
+    
+    for(const auto& route : mRoutes)
+    {
+        CFMutableDictionaryRef routeDict = CFDictionaryCreateMutable(kCFAllocatorDefault,
+                                                                      4,
+                                                                      &kCFTypeDictionaryKeyCallBacks,
+                                                                      &kCFTypeDictionaryValueCallBacks);
+        if(!routeDict)
+        {
+            continue;
+        }
+        
+        // Add source PID
+        CFNumberRef sourcePID = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &route.mSourcePID);
+        if(sourcePID)
+        {
+            CFDictionarySetValue(routeDict, CFSTR(kBGMAppRoutingKey_SourceProcessID), sourcePID);
+            CFRelease(sourcePID);
+        }
+        
+        // Add dest PID
+        CFNumberRef destPID = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &route.mDestPID);
+        if(destPID)
+        {
+            CFDictionarySetValue(routeDict, CFSTR(kBGMAppRoutingKey_DestProcessID), destPID);
+            CFRelease(destPID);
+        }
+        
+        // Add gain
+        CFNumberRef gain = CFNumberCreate(kCFAllocatorDefault, kCFNumberFloat32Type, &route.mGain);
+        if(gain)
+        {
+            CFDictionarySetValue(routeDict, CFSTR(kBGMAppRoutingKey_Gain), gain);
+            CFRelease(gain);
+        }
+        
+        // Add enabled
+        CFDictionarySetValue(routeDict, CFSTR(kBGMAppRoutingKey_Enabled), 
+                            route.mEnabled ? kCFBooleanTrue : kCFBooleanFalse);
+        
+        CFArrayAppendValue(routesArray, routeDict);
+        CFRelease(routeDict);
+    }
+    
+    return routesArray;
+}
+
+bool    BGM_Clients::SetRoutesFromArray(const CACFArray inRoutes)
+{
+    CAMutex::Locker theLocker(mMutex);
+    
+    bool didChange = false;
+    
+    for(UInt32 i = 0; i < inRoutes.GetNumberItems(); i++)
+    {
+        CACFDictionary theRoute(false);
+        inRoutes.GetCACFDictionary(i, theRoute);
+        
+        if(!theRoute.IsValid())
+        {
+            continue;
+        }
+        
+        // Get source PID
+        pid_t sourcePID;
+        if(!theRoute.GetSInt32(CFSTR(kBGMAppRoutingKey_SourceProcessID), sourcePID))
+        {
+            continue;
+        }
+        
+        // Get dest PID
+        pid_t destPID;
+        if(!theRoute.GetSInt32(CFSTR(kBGMAppRoutingKey_DestProcessID), destPID))
+        {
+            continue;
+        }
+        
+        // Get gain (default to 1.0)
+        Float32 gain = 1.0f;
+        theRoute.GetFloat32(CFSTR(kBGMAppRoutingKey_Gain), gain);
+        
+        // Get enabled (default to true)
+        bool enabled = true;
+        theRoute.GetBool(CFSTR(kBGMAppRoutingKey_Enabled), enabled);
+        
+        // Use the public SetRoute which will handle locking - but we already hold the lock
+        // So directly manipulate mRoutes here
+        bool found = false;
+        for(auto& existingRoute : mRoutes)
+        {
+            if(existingRoute.mSourcePID == sourcePID && existingRoute.mDestPID == destPID)
+            {
+                if(existingRoute.mGain != gain || existingRoute.mEnabled != enabled)
+                {
+                    existingRoute.mGain = gain;
+                    existingRoute.mEnabled = enabled;
+                    didChange = true;
+                }
+                found = true;
+                break;
+            }
+        }
+        
+        if(!found && enabled)
+        {
+            BGM_AudioRoute newRoute;
+            newRoute.mSourcePID = sourcePID;
+            newRoute.mDestPID = destPID;
+            newRoute.mGain = gain;
+            newRoute.mEnabled = enabled;
+            mRoutes.push_back(newRoute);
+            
+            // Allocate routing buffer for source client
+            mClientMap.AllocateRoutingBufferForPID(sourcePID);
+            
+            didChange = true;
+        }
+    }
+    
+    return didChange;
+}
+
+void    BGM_Clients::ClearRoutesForClient(pid_t inProcessID)
+{
+    CAMutex::Locker theLocker(mMutex);
+    
+    // Remove all routes where this process is source or destination
+    auto it = mRoutes.begin();
+    while(it != mRoutes.end())
+    {
+        if(it->mSourcePID == inProcessID || it->mDestPID == inProcessID)
+        {
+            DebugMsg("BGM_Clients::ClearRoutesForClient: Removing route from PID %d to PID %d",
+                     it->mSourcePID, it->mDestPID);
+            it = mRoutes.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+    
+    // Deallocate routing buffer for this client
+    mClientMap.DeallocateRoutingBufferForPID(inProcessID);
+}
+
+void    BGM_Clients::StoreClientAudioRT(UInt32 inClientID, const Float32* inBuffer, UInt32 inNumFrames)
+{
+    // Check if this client is a routing source
+    BGM_Client* theClient = mClientMap.GetClientPtrRT(inClientID);
+    if(!theClient)
+    {
+        return;
+    }
+    
+    // Check if any routes use this client as source
+    bool isRoutingSource = false;
+    for(const auto& route : mRoutes)
+    {
+        if(route.mEnabled && route.mSourcePID == theClient->mProcessID)
+        {
+            isRoutingSource = true;
+            break;
+        }
+    }
+    
+    if(isRoutingSource)
+    {
+        // Debug: log that we're storing audio
+        static int storeCount = 0;
+        if(storeCount++ % 1000 == 0)
+        {
+            DebugMsg("BGM_Clients::StoreClientAudioRT: Storing %u frames from client %u (PID %d)",
+                     inNumFrames, inClientID, theClient->mProcessID);
+        }
+        theClient->StoreToRoutingBuffer(inBuffer, inNumFrames, 0.0);
+    }
+}
+
+void    BGM_Clients::MixRoutedAudioRT(UInt32 inClientID, Float32* ioBuffer, UInt32 inNumFrames)
+{
+    // Get the destination client to find its process ID
+    BGM_Client* destClient = mClientMap.GetClientPtrRT(inClientID);
+    if(!destClient)
+    {
+        return;
+    }
+    
+    pid_t destPID = destClient->mProcessID;
+    
+    // Debug: count how many routes we find
+    int routeCount = 0;
+    
+    // Find all routes that target this client
+    for(const auto& route : mRoutes)
+    {
+        if(!route.mEnabled || route.mDestPID != destPID)
+        {
+            continue;
+        }
+        
+        routeCount++;
+        
+        // Find the source client
+        BGM_Client* sourceClient = mClientMap.GetClientByPIDRT(route.mSourcePID);
+        if(!sourceClient)
+        {
+            DebugMsg("BGM_Clients::MixRoutedAudioRT: Source client PID %d not found!", route.mSourcePID);
+            continue;
+        }
+        
+        // Fetch audio from source's routing buffer and mix into destination
+        // The buffer stores frames sequentially. After writing N frames, writePos points
+        // to the next position to write. To read the most recent N frames:
+        // - Frame 0 (oldest of the N) is at writePos - N
+        // - Frame N-1 (newest) is at writePos - 1
+        // We add a small safety margin to avoid reading data that's still being written
+        Float32 gain = route.mGain;
+        
+        // Read the last inNumFrames that were written, with a small safety margin
+        // Offset of 1 means "the most recently written frame"
+        // Offset of inNumFrames means "the oldest of the last inNumFrames frames"
+        for(UInt32 frame = 0; frame < inNumFrames; frame++)
+        {
+            // For frame 0 (first output frame), read the oldest available data
+            // For frame inNumFrames-1 (last output frame), read the newest data
+            // sampleOffset = inNumFrames - frame means:
+            //   frame 0 -> offset inNumFrames (oldest)
+            //   frame inNumFrames-1 -> offset 1 (newest)
+            UInt64 sampleOffset = inNumFrames - frame;
+            
+            // Fetch left and right channels
+            Float32 leftSample = sourceClient->FetchFromRoutingBuffer(0, sampleOffset);
+            Float32 rightSample = sourceClient->FetchFromRoutingBuffer(1, sampleOffset);
+            
+            // Mix with gain
+            ioBuffer[frame * 2] += leftSample * gain;
+            ioBuffer[frame * 2 + 1] += rightSample * gain;
+        }
+        
+        // Debug logging
+        static int mixCount = 0;
+        if(mixCount++ % 1000 == 0)
+        {
+            DebugMsg("BGM_Clients::MixRoutedAudioRT: Mixed %u frames from PID %d to client %u (PID %d)",
+                     inNumFrames, route.mSourcePID, inClientID, destPID);
+        }
+    }
+    
+    // Debug: if we expected routes but found none
+    static int noRouteCount = 0;
+    if(routeCount == 0 && noRouteCount++ % 1000 == 0)
+    {
+        DebugMsg("BGM_Clients::MixRoutedAudioRT: No routes found for client %u (PID %d), total routes: %zu",
+                 inClientID, destPID, mRoutes.size());
+    }
+}
+
+bool    BGM_Clients::HasIncomingRoutesRT(UInt32 inClientID) const
+{
+    // Get the client to find its process ID
+    BGM_Client* theClient = mClientMap.GetClientPtrRT(inClientID);
+    if(!theClient)
+    {
+        DebugMsg("BGM_Clients::HasIncomingRoutesRT: No client found for clientID %u", inClientID);
+        return false;
+    }
+    
+    pid_t clientPID = theClient->mProcessID;
+    
+    // Check if any enabled routes target this client
+    for(const auto& route : mRoutes)
+    {
+        if(route.mEnabled && route.mDestPID == clientPID)
+        {
+            DebugMsg("BGM_Clients::HasIncomingRoutesRT: Client %u (PID %d) HAS incoming route from PID %d",
+                     inClientID, clientPID, route.mSourcePID);
+            return true;
+        }
+    }
+    
+    return false;
+}
+

@@ -23,6 +23,8 @@ enum BGMDeviceProperty: AudioObjectPropertySelector {
     case appVolumes = 0x61707673            // 'apvs'
     /// Enabled output controls
     case enabledOutputControls = 0x62676374 // 'bgct'
+    /// App routing array
+    case appRouting = 0x61707274            // 'aprt'
 }
 
 /// Volume range constants (from BGM_Types.h)
@@ -53,6 +55,16 @@ struct BGMAppVolumeKeys {
     static let eqLowGain = "eqlo"
     static let eqMidGain = "eqmi"
     static let eqHighGain = "eqhi"
+}
+
+/// Dictionary keys for app routing data
+struct BGMAppRoutingKeys {
+    static let sourceProcessID = "srcPid"
+    static let destProcessID = "dstPid"
+    static let gain = "gain"
+    static let enabled = "enabled"
+    static let sourceBundleID = "srcBid"
+    static let destBundleID = "dstBid"
 }
 
 /// Manatee Device UID constants (must match BGM_Types.h)
@@ -369,6 +381,82 @@ final class BGMDeviceBridge: ObservableObject {
         appVolumes = newVolumes
     }
     
+    // MARK: - Audio Routing
+    
+    /// Represents a route between two apps
+    struct AudioRoute: Identifiable, Equatable {
+        let id = UUID()
+        var sourcePID: pid_t
+        var destPID: pid_t
+        var gain: Float
+        var isEnabled: Bool
+        var sourceBundleID: String?
+        var destBundleID: String?
+        
+        static func == (lhs: AudioRoute, rhs: AudioRoute) -> Bool {
+            lhs.sourcePID == rhs.sourcePID && lhs.destPID == rhs.destPID
+        }
+    }
+    
+    /// Set an audio route between two apps
+    /// - Parameters:
+    ///   - sourcePID: Source app's process ID
+    ///   - destPID: Destination app's process ID
+    ///   - gain: Routing gain (0.0 to 1.0+, default 1.0)
+    ///   - enabled: Whether the route is active
+    func setRoute(sourcePID: pid_t, destPID: pid_t, gain: Float = 1.0, enabled: Bool = true) {
+        guard isAvailable else {
+            print("⚠️ BGMDeviceBridge: Cannot set route - not available")
+            return
+        }
+        
+        print("🔀 BGMDeviceBridge.setRoute: \(sourcePID) -> \(destPID), gain: \(gain), enabled: \(enabled)")
+        
+        setAppRoutingProperty(sourcePID: sourcePID, destPID: destPID, gain: gain, enabled: enabled)
+    }
+    
+    /// Remove an audio route between two apps
+    func removeRoute(sourcePID: pid_t, destPID: pid_t) {
+        guard isAvailable else { return }
+        
+        print("🔀 BGMDeviceBridge.removeRoute: \(sourcePID) -> \(destPID)")
+        
+        setAppRoutingProperty(sourcePID: sourcePID, destPID: destPID, gain: 0.0, enabled: false)
+    }
+    
+    /// Get all active routes from the device
+    func getRoutes() -> [AudioRoute] {
+        guard isAvailable else { return [] }
+        
+        guard let routesArray = getAppRoutingProperty() else {
+            return []
+        }
+        
+        var routes: [AudioRoute] = []
+        
+        for case let routeDict as [String: Any] in routesArray {
+            let sourcePID = routeDict[BGMAppRoutingKeys.sourceProcessID] as? pid_t ?? 0
+            let destPID = routeDict[BGMAppRoutingKeys.destProcessID] as? pid_t ?? 0
+            let gain = (routeDict[BGMAppRoutingKeys.gain] as? NSNumber)?.floatValue ?? 1.0
+            let enabled = routeDict[BGMAppRoutingKeys.enabled] as? Bool ?? true
+            let sourceBundleID = routeDict[BGMAppRoutingKeys.sourceBundleID] as? String
+            let destBundleID = routeDict[BGMAppRoutingKeys.destBundleID] as? String
+            
+            if sourcePID != 0 && destPID != 0 {
+                routes.append(AudioRoute(
+                    sourcePID: sourcePID,
+                    destPID: destPID,
+                    gain: gain,
+                    isEnabled: enabled,
+                    sourceBundleID: sourceBundleID,
+                    destBundleID: destBundleID
+                ))
+            }
+        }
+        
+        return routes
+    }
+    
     // MARK: - Private - Device Discovery
     
     private func findDeviceByUID(_ uid: String) -> AudioObjectID? {
@@ -592,6 +680,70 @@ final class BGMDeviceBridge: ObservableObject {
             Character(UnicodeScalar(UInt32(bitPattern: code) & 0xFF)!)
         ]
         return String(chars)
+    }
+    
+    // MARK: - Private - Routing Property Access
+    
+    private func getAppRoutingProperty() -> [Any]? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: BGMDeviceProperty.appRouting.rawValue,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        var dataSize: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &dataSize)
+        
+        guard status == noErr, dataSize > 0 else { return nil }
+        
+        var cfArray: CFArray?
+        status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &dataSize, &cfArray)
+        
+        guard status == noErr, let array = cfArray else { return nil }
+        return array as? [Any]
+    }
+    
+    private func setAppRoutingProperty(sourcePID: pid_t, destPID: pid_t, gain: Float, enabled: Bool) {
+        guard deviceID != kAudioObjectUnknown else {
+            print("⚠️ BGMDeviceBridge: Cannot set routing - device not connected")
+            return
+        }
+        
+        var address = AudioObjectPropertyAddress(
+            mSelector: BGMDeviceProperty.appRouting.rawValue,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        // Build the dictionary with proper CF types
+        let cfDict = NSMutableDictionary()
+        cfDict[BGMAppRoutingKeys.sourceProcessID] = NSNumber(value: sourcePID)
+        cfDict[BGMAppRoutingKeys.destProcessID] = NSNumber(value: destPID)
+        cfDict[BGMAppRoutingKeys.gain] = NSNumber(value: gain)
+        cfDict[BGMAppRoutingKeys.enabled] = NSNumber(value: enabled)
+        
+        print("🔧 BGMDeviceBridge: Setting routing - source: \(sourcePID), dest: \(destPID), gain: \(gain), enabled: \(enabled)")
+        
+        // Create CFArray with single dictionary
+        let cfArray: CFArray = [cfDict] as CFArray
+        
+        var cfTypeRef: CFTypeRef = cfArray
+        let dataSize = UInt32(MemoryLayout<CFTypeRef>.size)
+        
+        let status = AudioObjectSetPropertyData(
+            deviceID,
+            &address,
+            0,
+            nil,
+            dataSize,
+            &cfTypeRef
+        )
+        
+        if status != noErr {
+            print("❌ BGMDeviceBridge: Failed to set app routing, status: \(status) (\(fourCharCodeToString(status)))")
+        } else {
+            print("✅ BGMDeviceBridge: Successfully set route from \(sourcePID) to \(destPID)")
+        }
     }
     
     // MARK: - Private - Property Listeners

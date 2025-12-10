@@ -490,190 +490,454 @@ struct ChannelStripView: View {
     }
 }
 
-// MARK: - Routing Popover View
+// MARK: - Routing Popover View (DAW-style Matrix)
 
 struct RoutingPopoverView: View {
     @ObservedObject var sourceChannel: AudioChannel
     let availableTargets: [AudioChannel]
     let onRoutingChanged: (UUID, Int, Bool) -> Void  // (targetId, inputChannel, enabled)
     
+    private let cellSize: CGFloat = 28
+    private let headerHeight: CGFloat = 60
+    private let rowHeight: CGFloat = 32
+    
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header
-            HStack {
-                if let icon = sourceChannel.icon {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .frame(width: 20, height: 20)
-                }
-                Text("Route Output From")
-                    .font(.headline)
-                Text(sourceChannel.name)
-                    .font(.headline)
-                    .foregroundColor(ManateeColors.accentGreen)
-            }
-            .padding(.bottom, 4)
+        VStack(alignment: .leading, spacing: 0) {
+            // Header with source info
+            routingHeader
             
             Divider()
+                .padding(.vertical, 8)
             
-            // Master output toggle
-            HStack {
-                Toggle(isOn: Binding(
-                    get: { sourceChannel.routing.sendToMaster },
-                    set: { newValue in
-                        sourceChannel.routing.sendToMaster = newValue
-                        sourceChannel.routing.objectWillChange.send()
-                    }
-                )) {
-                    HStack {
-                        Image(systemName: "speaker.wave.3.fill")
-                            .foregroundColor(ManateeColors.accentGreen)
-                        Text("Master Output")
-                            .fontWeight(.medium)
-                    }
-                }
-                .toggleStyle(.checkbox)
-            }
-            .padding(.vertical, 4)
-            
-            if !availableTargets.isEmpty {
-                Divider()
-                
-                Text("Send to App Inputs:")
-                    .font(.subheadline)
-                    .foregroundColor(ManateeColors.textSecondary)
-                
-                // List of available target apps
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(availableTargets) { target in
-                            RoutingTargetRow(
-                                sourceChannel: sourceChannel,
-                                targetChannel: target,
-                                onRoutingChanged: onRoutingChanged
-                            )
-                        }
-                    }
-                }
-                .frame(maxHeight: 200)
+            // Matrix section
+            if availableTargets.isEmpty {
+                emptyState
             } else {
-                Text("No other apps available for routing")
-                    .font(.caption)
-                    .foregroundColor(ManateeColors.textTertiary)
-                    .padding(.vertical, 8)
+                matrixView
             }
             
             Divider()
+                .padding(.vertical, 8)
             
-            // Info text
-            Text("Route this app's audio to other app inputs for processing chains, or send to multiple destinations simultaneously.")
-                .font(.caption)
-                .foregroundColor(ManateeColors.textTertiary)
-                .fixedSize(horizontal: false, vertical: true)
+            // Master output status (automatic based on routing)
+            masterOutputStatus
+
+            Divider()
+                .padding(.vertical, 8)
+
+            // Legend and help
+            legendSection
         }
         .padding(16)
-        .frame(width: 300)
+        .frame(width: max(380, CGFloat(maxDestinationInputs * 2 + 1) * cellSize + 180))
+    }
+    
+    // MARK: - Header
+    
+    private var routingHeader: some View {
+        HStack(spacing: 12) {
+            // Source app icon
+            if let icon = sourceChannel.icon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 32, height: 32)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(ManateeColors.brand.opacity(0.2))
+                    .frame(width: 32, height: 32)
+                    .overlay(
+                        Image(systemName: "app.fill")
+                            .foregroundColor(ManateeColors.brand)
+                    )
+            }
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(sourceChannel.name)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(ManateeColors.textPrimary)
+                
+                HStack(spacing: 4) {
+                    Text("ROUTING MATRIX")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(ManateeColors.brand)
+                    
+                    Text("•")
+                        .foregroundColor(ManateeColors.textTertiary)
+                    
+                    Text("\(sourceChannel.outputChannelCount) outputs")
+                        .font(.system(size: 9))
+                        .foregroundColor(ManateeColors.textSecondary)
+                }
+            }
+            
+            Spacer()
+            
+            // Active routes badge
+            if !sourceChannel.routing.activeRoutes.isEmpty {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(ManateeColors.accentGreen)
+                        .frame(width: 6, height: 6)
+                    Text("\(sourceChannel.routing.activeRoutes.count) active")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(ManateeColors.accentGreen)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(ManateeColors.accentGreen.opacity(0.15))
+                .cornerRadius(10)
+            }
+        }
+    }
+    
+    // MARK: - Empty State
+    
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 24))
+                .foregroundColor(ManateeColors.textTertiary)
+            Text("No other apps available for routing")
+                .font(.caption)
+                .foregroundColor(ManateeColors.textTertiary)
+            Text("Add more apps to the mixer to route audio between them")
+                .font(.system(size: 10))
+                .foregroundColor(ManateeColors.textTertiary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 20)
+    }
+    
+    // MARK: - Matrix View
+    
+    private var matrixView: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Section title
+            HStack {
+                Text("DESTINATIONS")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(ManateeColors.textTertiary)
+                
+                Spacer()
+                
+                // Clear all button
+                if !sourceChannel.routing.activeRoutes.isEmpty {
+                    Button(action: clearAllRoutes) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "xmark.circle")
+                                .font(.system(size: 10))
+                            Text("Clear All")
+                                .font(.system(size: 10))
+                        }
+                        .foregroundColor(.red.opacity(0.8))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.bottom, 8)
+            
+            // Matrix grid
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(spacing: 2) {
+                    // Column headers (Source outputs)
+                    matrixColumnHeaders
+                    
+                    // Each row is a destination app
+                    ForEach(availableTargets) { target in
+                        RoutingMatrixRow(
+                            sourceChannel: sourceChannel,
+                            targetChannel: target,
+                            cellSize: cellSize,
+                            onRoutingChanged: onRoutingChanged
+                        )
+                    }
+                }
+            }
+            .frame(maxHeight: 200)
+        }
+    }
+    
+    // MARK: - Column Headers
+    
+    private var matrixColumnHeaders: some View {
+        HStack(spacing: 2) {
+            // Destination label column
+            Text("TO ↓  FROM →")
+                .font(.system(size: 8, weight: .medium))
+                .foregroundColor(ManateeColors.textTertiary)
+                .frame(width: 120, alignment: .leading)
+            
+            // Source output columns (Out L, Out R, etc.)
+            ForEach(0..<sourceChannel.outputChannelCount, id: \.self) { outputIndex in
+                Text(outputLabel(outputIndex))
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundColor(ManateeColors.brand)
+                    .frame(width: cellSize, height: 20)
+                    .background(ManateeColors.brand.opacity(0.1))
+                    .cornerRadius(4)
+            }
+            
+            Spacer()
+        }
+        .padding(.bottom, 4)
+    }
+    
+    // MARK: - Master Output Status (automatic based on routing)
+    
+    private var hasActiveRoutes: Bool {
+        !sourceChannel.routing.activeRoutes.isEmpty
+    }
+    
+    private var masterOutputStatus: some View {
+        HStack(spacing: 12) {
+            Image(systemName: hasActiveRoutes ? "arrow.triangle.branch" : "speaker.wave.3.fill")
+                .font(.system(size: 16))
+                .foregroundColor(hasActiveRoutes ? ManateeColors.brand : ManateeColors.accentGreen)
+                .frame(width: 24)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(hasActiveRoutes ? "Routed to Apps" : "Direct to Master")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(ManateeColors.textPrimary)
+                
+                Text(hasActiveRoutes ? "Audio goes through routed apps first" : "Audio goes directly to output")
+                    .font(.system(size: 9))
+                    .foregroundColor(ManateeColors.textTertiary)
+            }
+            
+            Spacer()
+            
+            // Status indicator (not a toggle)
+            Text(hasActiveRoutes ? "ROUTED" : "DIRECT")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(hasActiveRoutes ? ManateeColors.brand : ManateeColors.accentGreen)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(hasActiveRoutes ? ManateeColors.brand.opacity(0.15) : ManateeColors.accentGreen.opacity(0.15))
+                )
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(hasActiveRoutes ? ManateeColors.brand.opacity(0.05) : ManateeColors.accentGreen.opacity(0.1))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(hasActiveRoutes ? ManateeColors.brand.opacity(0.2) : ManateeColors.accentGreen.opacity(0.3), lineWidth: 1)
+        )
+    }
+    
+    // MARK: - Legend
+    
+    private var legendSection: some View {
+        HStack(spacing: 16) {
+            HStack(spacing: 6) {
+                MatrixCellButton(isActive: true, cellSize: 16, action: {})
+                    .disabled(true)
+                Text("Routed")
+                    .font(.system(size: 9))
+            }
+            
+            HStack(spacing: 6) {
+                MatrixCellButton(isActive: false, cellSize: 16, action: {})
+                    .disabled(true)
+                Text("Not routed")
+                    .font(.system(size: 9))
+            }
+            
+            Spacer()
+            
+            Text("Click cells to toggle routes")
+                .font(.system(size: 9))
+                .foregroundColor(ManateeColors.textTertiary)
+        }
+        .foregroundColor(ManateeColors.textSecondary)
+    }
+    
+    // MARK: - Helpers
+    
+    private var maxDestinationInputs: Int {
+        availableTargets.map { $0.inputChannelCount }.max() ?? 2
+    }
+    
+    private func outputLabel(_ index: Int) -> String {
+        if sourceChannel.outputChannelCount == 2 {
+            return index == 0 ? "L" : "R"
+        }
+        return "\(index + 1)"
+    }
+    
+    private func clearAllRoutes() {
+        for target in availableTargets {
+            for inputIndex in 0..<target.inputChannelCount {
+                sourceChannel.routing.setRoute(to: target.id, inputChannel: inputIndex, enabled: false)
+                onRoutingChanged(target.id, inputIndex, false)
+            }
+        }
+        sourceChannel.routing.objectWillChange.send()
     }
 }
 
-// MARK: - Routing Target Row
+// MARK: - Routing Matrix Row
 
-struct RoutingTargetRow: View {
+struct RoutingMatrixRow: View {
     @ObservedObject var sourceChannel: AudioChannel
-    @ObservedObject var targetChannel: AudioChannel
+    let targetChannel: AudioChannel
+    let cellSize: CGFloat
     let onRoutingChanged: (UUID, Int, Bool) -> Void
     
     @State private var isExpanded = false
     
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // App header with expand toggle
-            HStack {
-                Button(action: { isExpanded.toggle() }) {
-                    HStack {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 10))
-                            .foregroundColor(ManateeColors.textTertiary)
-                        
-                        if let icon = targetChannel.icon {
-                            Image(nsImage: icon)
-                                .resizable()
-                                .frame(width: 16, height: 16)
-                        }
-                        
-                        Text(targetChannel.name)
-                            .font(.system(size: 12, weight: .medium))
-                        
-                        Spacer()
-                        
-                        // Show active route indicator
-                        if hasAnyRouteToTarget {
-                            Circle()
-                                .fill(ManateeColors.accentGreen)
-                                .frame(width: 6, height: 6)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.vertical, 2)
-            
-            // Expanded channel routing options
-            if isExpanded {
-                VStack(alignment: .leading, spacing: 4) {
-                    // For stereo (2 channel) apps
-                    if targetChannel.inputChannelCount <= 2 {
-                        // Simple L/R routing
-                        HStack(spacing: 16) {
-                            routeToggle(label: "L → L", inputChannel: 0)
-                            routeToggle(label: "R → R", inputChannel: 1)
-                        }
-                        .padding(.leading, 20)
-                    } else {
-                        // Multi-channel apps (like Ableton 8in/8out)
-                        let channelPairs = stride(from: 0, to: targetChannel.inputChannelCount, by: 2)
-                        ForEach(Array(channelPairs), id: \.self) { pairStart in
-                            HStack(spacing: 16) {
-                                routeToggle(label: "→ \(pairStart + 1)", inputChannel: pairStart)
-                                if pairStart + 1 < targetChannel.inputChannelCount {
-                                    routeToggle(label: "→ \(pairStart + 2)", inputChannel: pairStart + 1)
-                                }
-                            }
-                            .padding(.leading, 20)
-                        }
-                    }
-                }
-                .padding(.vertical, 4)
-                .background(ManateeColors.channelBackground.opacity(0.3))
-                .cornerRadius(4)
-            }
-        }
-    }
-    
-    private func routeToggle(label: String, inputChannel: Int) -> some View {
-        let isEnabled = sourceChannel.routing.isRoutedTo(channelId: targetChannel.id, inputChannel: inputChannel)
-        
-        return Toggle(isOn: Binding(
-            get: { isEnabled },
-            set: { newValue in
-                sourceChannel.routing.setRoute(to: targetChannel.id, inputChannel: inputChannel, enabled: newValue)
-                sourceChannel.routing.objectWillChange.send()
-                onRoutingChanged(targetChannel.id, inputChannel, newValue)
-            }
-        )) {
-            Text(label)
-                .font(.system(size: 11, design: .monospaced))
-        }
-        .toggleStyle(.checkbox)
-    }
-    
-    private var hasAnyRouteToTarget: Bool {
-        for i in 0..<targetChannel.inputChannelCount {
-            if sourceChannel.routing.isRoutedTo(channelId: targetChannel.id, inputChannel: i) {
+    private var hasAnyRoute: Bool {
+        for inputIndex in 0..<targetChannel.inputChannelCount {
+            if sourceChannel.routing.isRoutedTo(channelId: targetChannel.id, inputChannel: inputIndex) {
                 return true
             }
         }
         return false
+    }
+    
+    private var activeRouteCount: Int {
+        var count = 0
+        for inputIndex in 0..<targetChannel.inputChannelCount {
+            if sourceChannel.routing.isRoutedTo(channelId: targetChannel.id, inputChannel: inputIndex) {
+                count += 1
+            }
+        }
+        return count
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 2) {
+                // Destination app info
+                HStack(spacing: 6) {
+                    // App icon
+                    if let icon = targetChannel.icon {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .frame(width: 18, height: 18)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    } else {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(ManateeColors.textTertiary.opacity(0.3))
+                            .frame(width: 18, height: 18)
+                            .overlay(
+                                Image(systemName: "app.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(ManateeColors.textTertiary)
+                            )
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(targetChannel.name)
+                            .font(.system(size: 11, weight: hasAnyRoute ? .medium : .regular))
+                            .foregroundColor(hasAnyRoute ? ManateeColors.textPrimary : ManateeColors.textSecondary)
+                            .lineLimit(1)
+                        
+                        if hasAnyRoute {
+                            Text("\(activeRouteCount) route\(activeRouteCount == 1 ? "" : "s")")
+                                .font(.system(size: 8))
+                                .foregroundColor(ManateeColors.accentGreen)
+                        }
+                    }
+                }
+                .frame(width: 120, alignment: .leading)
+                
+                // Matrix cells - one for each source output → this destination
+                ForEach(0..<sourceChannel.outputChannelCount, id: \.self) { outputIndex in
+                    // For now, route each output to corresponding input (1:1 mapping)
+                    // Output 0 (L) → Input 0 (L), Output 1 (R) → Input 1 (R)
+                    let inputIndex = min(outputIndex, targetChannel.inputChannelCount - 1)
+                    let isActive = sourceChannel.routing.isRoutedTo(channelId: targetChannel.id, inputChannel: inputIndex)
+                    
+                    MatrixCellButton(isActive: isActive, cellSize: cellSize) {
+                        let newState = !isActive
+                        sourceChannel.routing.setRoute(to: targetChannel.id, inputChannel: inputIndex, enabled: newState)
+                        sourceChannel.routing.objectWillChange.send()
+                        onRoutingChanged(targetChannel.id, inputIndex, newState)
+                    }
+                }
+                
+                Spacer()
+                
+                // Quick actions
+                HStack(spacing: 4) {
+                    // Route all outputs to this destination
+                    Button(action: {
+                        let shouldEnable = !hasAnyRoute
+                        for outputIndex in 0..<sourceChannel.outputChannelCount {
+                            let inputIndex = min(outputIndex, targetChannel.inputChannelCount - 1)
+                            sourceChannel.routing.setRoute(to: targetChannel.id, inputChannel: inputIndex, enabled: shouldEnable)
+                            onRoutingChanged(targetChannel.id, inputIndex, shouldEnable)
+                        }
+                        sourceChannel.routing.objectWillChange.send()
+                    }) {
+                        Image(systemName: hasAnyRoute ? "xmark.circle" : "arrow.right.circle")
+                            .font(.system(size: 12))
+                            .foregroundColor(hasAnyRoute ? .red.opacity(0.7) : ManateeColors.accentGreen.opacity(0.7))
+                    }
+                    .buttonStyle(.plain)
+                    .help(hasAnyRoute ? "Clear routes to this app" : "Route all to this app")
+                }
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(hasAnyRoute ? ManateeColors.accentGreen.opacity(0.08) : Color.clear)
+            )
+        }
+    }
+}
+
+// MARK: - Matrix Cell Button
+
+struct MatrixCellButton: View {
+    let isActive: Bool
+    let cellSize: CGFloat
+    let action: () -> Void
+    
+    @State private var isHovering = false
+    
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                // Background
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(isActive ? ManateeColors.accentGreen : ManateeColors.channelBackground)
+                
+                // Border
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(
+                        isActive ? ManateeColors.accentGreen : (isHovering ? ManateeColors.textTertiary : ManateeColors.channelBackground.opacity(0.5)),
+                        lineWidth: 1
+                    )
+                
+                // Checkmark for active state
+                if isActive {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: cellSize * 0.4, weight: .bold))
+                        .foregroundColor(.white)
+                }
+                
+                // Hover indicator
+                if isHovering && !isActive {
+                    Circle()
+                        .fill(ManateeColors.textTertiary.opacity(0.3))
+                        .frame(width: cellSize * 0.3, height: cellSize * 0.3)
+                }
+            }
+            .frame(width: cellSize, height: cellSize)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovering = hovering
+        }
     }
 }
 

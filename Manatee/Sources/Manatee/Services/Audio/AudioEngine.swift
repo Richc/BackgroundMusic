@@ -392,10 +392,17 @@ final class AudioEngine: ObservableObject {
             }
         }
         
-        // Update active state for all app channels
+        // Update active state and process ID for all app channels
         for channel in channels where channel.channelType == .application {
             let isRunning = appStore.isAppRunning(channel.identifier)
             channel.isActive = isRunning
+            
+            // Update process ID from running application
+            if let runningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == channel.identifier }) {
+                channel.processId = runningApp.processIdentifier
+            } else {
+                channel.processId = 0
+            }
         }
     }
     
@@ -434,8 +441,13 @@ final class AudioEngine: ObservableObject {
             }
         }
         
-        // Set initial active state
+        // Set initial active state and process ID
         channel.isActive = managedApp.isRunning
+        
+        // Get process ID if running
+        if let runningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
+            channel.processId = runningApp.processIdentifier
+        }
         
         return channel
     }
@@ -532,6 +544,16 @@ final class AudioEngine: ObservableObject {
             return
         }
         
+        // Check if sendToMaster is disabled for this channel
+        let channel = channels.first { $0.identifier == bundleID }
+        let sendToMaster = channel?.routing.sendToMaster ?? true
+        
+        if !sendToMaster {
+            // If sendToMaster is off, keep volume at 0 (routing only)
+            // Don't log this - it happens frequently during slider drags
+            return
+        }
+        
         // Apply master volume and mute
         let masterVolume = (masterChannel?.isMuted == true) ? 0 : (masterChannel?.volume ?? 1.0)
         let effectiveVolume = volume * masterVolume
@@ -546,8 +568,17 @@ final class AudioEngine: ObservableObject {
             return
         }
         
+        // Check if sendToMaster is disabled for this channel
+        let channel = channels.first { $0.identifier == bundleID }
+        let sendToMaster = channel?.routing.sendToMaster ?? true
+        
+        if !sendToMaster {
+            // If sendToMaster is off, keep volume at 0 (routing only)
+            return
+        }
+        
         // Get the channel's current fader volume and apply master volume
-        let faderVolume = channels.first { $0.identifier == bundleID }?.volume ?? 1.0
+        let faderVolume = channel?.volume ?? 1.0
         let masterVolume = (masterChannel?.isMuted == true) ? 0 : (masterChannel?.volume ?? 1.0)
         let effectiveVolume: Float = muted ? 0 : (faderVolume * masterVolume)
         print("🔇 AudioEngine.setAppMute: \(bundleID) (pid: \(pid)) -> \(muted) (effective: \(Int(effectiveVolume * 100))%)")
@@ -586,6 +617,73 @@ final class AudioEngine: ObservableObject {
             setAppPan(bundleID: bundleID, pid: app.processIdentifier, pan: pan)
         } else {
             print("⚠️ AudioEngine.setAppPan: App not found for \(bundleID)")
+        }
+    }
+    
+    /// Set whether an app's audio goes to master output
+    /// When sendToMaster is false, the app's volume is set to 0 but audio is still captured for routing
+    func setAppSendToMaster(channel: AudioChannel, sendToMaster: Bool) {
+        guard isBGMDriverAvailable else {
+            print("⚠️ Cannot set sendToMaster - BGMDriver not available")
+            return
+        }
+        
+        let bundleID = channel.identifier
+        
+        // Update the model
+        channel.routing.sendToMaster = sendToMaster
+        
+        // Get the running app
+        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) else {
+            print("⚠️ AudioEngine.setAppSendToMaster: App not found for \(bundleID)")
+            return
+        }
+        
+        let pid = app.processIdentifier
+        
+        if sendToMaster {
+            // Restore the app's actual volume
+            let faderVolume = channel.isMuted ? 0 : channel.volume
+            let masterVolume = (masterChannel?.isMuted == true) ? 0 : (masterChannel?.volume ?? 1.0)
+            let effectiveVolume = faderVolume * masterVolume
+            print("🔊 AudioEngine.setAppSendToMaster: \(bundleID) -> MASTER ON (volume: \(Int(effectiveVolume * 100))%)")
+            bgmBridge.setVolume(effectiveVolume, forBundleID: bundleID, pid: pid)
+        } else {
+            // Set volume to 0 to mute to master, but audio is still captured in driver for routing
+            print("🔇 AudioEngine.setAppSendToMaster: \(bundleID) -> MASTER OFF (routing only)")
+            bgmBridge.setVolume(0, forBundleID: bundleID, pid: pid)
+        }
+    }
+    
+    /// Helper to update master volume based on sendToMaster state
+    private func updateMasterVolumeForChannel(_ channel: AudioChannel) {
+        guard isBGMDriverAvailable else { return }
+        
+        let bundleID = channel.identifier
+        let pid = channel.processId
+        
+        // Fallback to looking up from running apps if processId is 0
+        let effectivePID: pid_t
+        if pid > 0 {
+            effectivePID = pid
+        } else if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
+            effectivePID = app.processIdentifier
+        } else {
+            print("⚠️ updateMasterVolumeForChannel: No valid PID for \(bundleID)")
+            return
+        }
+        
+        if channel.routing.sendToMaster {
+            // Restore actual volume
+            let faderVolume = channel.isMuted ? 0 : channel.volume
+            let masterVolume = (masterChannel?.isMuted == true) ? 0 : (masterChannel?.volume ?? 1.0)
+            let effectiveVolume = faderVolume * masterVolume
+            print("🔊 Routing changed: \(bundleID) (pid: \(effectivePID)) -> DIRECT to master (volume: \(Int(effectiveVolume * 100))%)")
+            bgmBridge.setVolume(effectiveVolume, forBundleID: bundleID, pid: effectivePID)
+        } else {
+            // Mute to master (audio is routed to other apps instead)
+            print("🔇 Routing changed: \(bundleID) (pid: \(effectivePID)) -> ROUTED (muted to master)")
+            bgmBridge.setVolume(0, forBundleID: bundleID, pid: effectivePID)
         }
     }
     
@@ -668,6 +766,11 @@ final class AudioEngine: ObservableObject {
         // Update the routing in the source channel's model
         source.routing.setRoute(to: targetId, inputChannel: inputChannel, enabled: enabled)
         
+        // Automatically update sendToMaster based on whether there are active routes
+        // If there are any active routes, audio should NOT go to master (it goes via routed apps)
+        let hasActiveRoutes = !source.routing.activeRoutes.isEmpty
+        source.routing.sendToMaster = !hasActiveRoutes
+        
         // Find the target channel
         guard let targetChannel = channels.first(where: { $0.id == targetId }) else {
             print("⚠️ AudioEngine.setRouting: Target channel not found for ID \(targetId)")
@@ -675,19 +778,36 @@ final class AudioEngine: ObservableObject {
         }
         
         print("🔀 AudioEngine.setRouting: \(source.name) -> \(targetChannel.name) ch\(inputChannel + 1) = \(enabled)")
+        print("   hasActiveRoutes: \(hasActiveRoutes), sendToMaster: \(source.routing.sendToMaster)")
+        
+        // ALWAYS update the driver volume based on routing state
+        // This ensures the source is muted to master when routed
+        updateMasterVolumeForChannel(source)
         
         // Notify the routing callback if set
         source.onRoutingChanged?(source.routing)
         
-        // TODO: Send routing configuration to BGMDriver
-        // This would require driver-level support for inter-app audio routing
-        // For now, we'll just track the routing in the model
-        // The actual audio routing will need driver modifications
+        // Send routing configuration to BGMDriver
+        // This requires both source and target to have valid process IDs
+        let sourcePID = source.processId
+        let targetPID = targetChannel.processId
         
-        if enabled {
-            print("   ✅ Route enabled: \(source.identifier) (pid: \(source.processId)) -> \(targetChannel.identifier) (pid: \(targetChannel.processId)) input \(inputChannel)")
+        if sourcePID > 0 && targetPID > 0 {
+            // Call the driver to set up the route
+            BGMDeviceBridge.shared.setRoute(
+                sourcePID: sourcePID,
+                destPID: targetPID,
+                gain: 1.0,  // Full gain for now
+                enabled: enabled
+            )
+            
+            if enabled {
+                print("   ✅ Driver route enabled: \(source.identifier) (pid: \(sourcePID)) -> \(targetChannel.identifier) (pid: \(targetPID))")
+            } else {
+                print("   ❌ Driver route disabled: \(source.identifier) -> \(targetChannel.identifier)")
+            }
         } else {
-            print("   ❌ Route disabled: \(source.identifier) -> \(targetChannel.identifier) input \(inputChannel)")
+            print("   ⚠️ Cannot set driver route: source PID=\(sourcePID), target PID=\(targetPID) (need valid PIDs)")
         }
         
         // Log current routing state

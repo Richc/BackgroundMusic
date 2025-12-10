@@ -32,6 +32,9 @@
 #include "CAMutex.h"
 #include "CACFArray.h"
 
+// STL Includes
+#include <vector>
+
 // System Includes
 #include <CoreAudio/AudioServerPlugIn.h>
 
@@ -114,6 +117,35 @@ public:
     // Returns true if any clients' relative volumes were changed.
     bool                                SetClientsRelativeVolumes(const CACFArray inAppVolumes);
     
+    // Inter-app audio routing methods
+    
+    // Set a route from source client to destination client with gain
+    // Returns true if the routing configuration changed
+    bool                                SetRoute(pid_t inSourcePID, pid_t inDestPID, 
+                                                  Float32 inGain, bool inEnabled);
+    
+    // Get all active routes as a CFArrayRef of dictionaries (caller must release)
+    CFArrayRef                          CopyRoutesAsArray() const;
+    
+    // Set routes from a CACFArray of dictionaries (batch update)
+    // Returns true if any routes changed
+    bool                                SetRoutesFromArray(const CACFArray inRoutes);
+    
+    // Clear all routes involving a specific client (called when client is removed)
+    void                                ClearRoutesForClient(pid_t inProcessID);
+    
+    // RT-safe: Store a client's processed audio to its routing buffer
+    void                                StoreClientAudioRT(UInt32 inClientID, const Float32* inBuffer, 
+                                                           UInt32 inNumFrames);
+    
+    // RT-safe: Mix routed audio into a destination client's buffer
+    // Called before the destination client's audio is processed
+    void                                MixRoutedAudioRT(UInt32 inClientID, Float32* ioBuffer, 
+                                                          UInt32 inNumFrames);
+    
+    // RT-safe: Check if a client has any incoming routes (is a routing destination)
+    bool                                HasIncomingRoutesRT(UInt32 inClientID) const;
+    
 private:
     AudioObjectID                       mOwnerDeviceID;
     BGM_ClientMap                       mClientMap;
@@ -146,6 +178,10 @@ private:
     
     // The volume curve we apply to raw client volumes before they're used
     CAVolumeCurve                       mRelativeVolumeCurve;
+    
+    // Global routing table for inter-app audio routing
+    // Maps source PID -> list of routes from that source
+    std::vector<BGM_AudioRoute>         mRoutes;
     
 };
 

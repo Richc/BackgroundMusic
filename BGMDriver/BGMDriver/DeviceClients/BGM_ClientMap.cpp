@@ -584,5 +584,56 @@ void    BGM_ClientMap::SwapInShadowMapsRT()
     mClientMapByBundleID.swap(mClientMapByBundleIDShadow);
 }
 
+#pragma mark Routing
+
+void    BGM_ClientMap::AllocateRoutingBufferForPID(pid_t inAppPID)
+{
+    CAMutex::Locker theShadowMapsLocker(mShadowMapsMutex);
+    
+    auto theAllocateInShadowMapsFunc = [&] {
+        auto theClients = GetClients(inAppPID);
+        if(theClients != nullptr) {
+            for(auto theClient: *theClients) {
+                theClient->AllocateRoutingBuffer();
+            }
+        }
+    };
+    
+    theAllocateInShadowMapsFunc();
+    SwapInShadowMaps();
+    theAllocateInShadowMapsFunc();
+}
+
+void    BGM_ClientMap::DeallocateRoutingBufferForPID(pid_t inAppPID)
+{
+    CAMutex::Locker theShadowMapsLocker(mShadowMapsMutex);
+    
+    auto theDeallocateInShadowMapsFunc = [&] {
+        auto theClients = GetClients(inAppPID);
+        if(theClients != nullptr) {
+            for(auto theClient: *theClients) {
+                theClient->DeallocateRoutingBuffer();
+            }
+        }
+    };
+    
+    theDeallocateInShadowMapsFunc();
+    SwapInShadowMaps();
+    theDeallocateInShadowMapsFunc();
+}
+
+BGM_Client* _Nullable BGM_ClientMap::GetClientByPIDRT(pid_t inAppPID) const
+{
+    CAMutex::Locker theMapsLocker(mMapsMutex);
+    
+    auto theClientItr = const_cast<std::map<pid_t, BGM_ClientPtrList>&>(mClientMapByPID).find(inAppPID);
+    if(theClientItr != mClientMapByPID.end() && !theClientItr->second.empty())
+    {
+        // Return the first client for this PID
+        return theClientItr->second.front();
+    }
+    return nullptr;
+}
+
 #pragma clang assume_nonnull end
 

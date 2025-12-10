@@ -57,6 +57,7 @@ enum PreferencesTab: String, CaseIterable, Identifiable {
     case osc = "OSC"
     case shortcuts = "Shortcuts"
     case advanced = "Advanced"
+    case settings = "Settings"
     
     var id: String { rawValue }
     
@@ -68,6 +69,7 @@ enum PreferencesTab: String, CaseIterable, Identifiable {
         case .osc: return "network"
         case .shortcuts: return "keyboard"
         case .advanced: return "wrench.and.screwdriver"
+        case .settings: return "slider.horizontal.3"
         }
     }
     
@@ -80,6 +82,7 @@ enum PreferencesTab: String, CaseIterable, Identifiable {
         case .osc: OSCPreferencesView()
         case .shortcuts: ShortcutsPreferencesView()
         case .advanced: AdvancedPreferencesView()
+        case .settings: SettingsView()
         }
     }
 }

@@ -121,7 +121,12 @@ enum
     kAudioDeviceCustomPropertyAppVolumes                              = 'apvs',
     // A CFArray of CFBooleans indicating which of BGMDevice's controls are enabled. All controls are enabled
     // by default. This property is settable. See the array indices below for more info.
-    kAudioDeviceCustomPropertyEnabledOutputControls                   = 'bgct'
+    kAudioDeviceCustomPropertyEnabledOutputControls                   = 'bgct',
+    // Inter-app audio routing matrix. A CFArray of CFDictionaries specifying routes from source to destination apps.
+    // Each dictionary contains: "srcPid" (source process ID), "dstPid" (destination process ID), 
+    // "srcCh" (source output channel 0=L,1=R), "dstCh" (destination input channel 0=L,1=R), "enabled" (CFBoolean).
+    // Setting this property adds or updates routes. Getting returns all active routes.
+    kAudioDeviceCustomPropertyAppRouting                              = 'aprt'
 };
 
 // The number of silent/audible frames before BGMDriver will change kAudioDeviceCustomPropertyDeviceAudibleState
@@ -177,6 +182,28 @@ enum BGMDeviceAudibleState : SInt32
 #define kAppEQGainCenterRawValue 0
 #define kAppEQGainNoValue INT_MIN
 
+// kAudioDeviceCustomPropertyAppRouting keys
+// The source app's pid as a CFNumber<SInt32>
+#define kBGMAppRoutingKey_SourceProcessID    "srcPid"
+// The destination app's pid as a CFNumber<SInt32>
+#define kBGMAppRoutingKey_DestProcessID      "dstPid"
+// Source output channel (0=L, 1=R, etc.) as a CFNumber<SInt32>
+#define kBGMAppRoutingKey_SourceChannel      "srcCh"
+// Destination input channel (0=L, 1=R, etc.) as a CFNumber<SInt32>
+#define kBGMAppRoutingKey_DestChannel        "dstCh"
+// Whether the route is enabled as a CFBoolean
+#define kBGMAppRoutingKey_Enabled            "enabled"
+// Routing gain (0.0 to 1.0+)
+#define kBGMAppRoutingKey_Gain               "gain"
+// The source app's bundle ID as a CFString (optional, for reference)
+#define kBGMAppRoutingKey_SourceBundleID     "srcBid"
+// The destination app's bundle ID as a CFString (optional, for reference)
+#define kBGMAppRoutingKey_DestBundleID       "dstBid"
+
+// Maximum routes per client and max ring buffer size for routing
+#define kMaxRoutesPerClient 16
+#define kRoutingRingBufferFrames 4096
+
 // kAudioDeviceCustomPropertyEnabledOutputControls indices
 enum
 {
@@ -223,6 +250,12 @@ static const AudioObjectPropertyAddress kBGMAppVolumesAddress = {
 static const AudioObjectPropertyAddress kBGMEnabledOutputControlsAddress = {
     kAudioDeviceCustomPropertyEnabledOutputControls,
     kAudioObjectPropertyScopeOutput,
+    kAudioObjectPropertyElementMaster
+};
+
+static const AudioObjectPropertyAddress kBGMAppRoutingAddress = {
+    kAudioDeviceCustomPropertyAppRouting,
+    kAudioObjectPropertyScopeGlobal,
     kAudioObjectPropertyElementMaster
 };
 

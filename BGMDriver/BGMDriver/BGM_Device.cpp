@@ -327,6 +327,7 @@ bool	BGM_Device::Device_HasProperty(AudioObjectID inObjectID, pid_t inClientPID,
         case kAudioDeviceCustomPropertyMusicPlayerBundleID:
         case kAudioDeviceCustomPropertyDeviceIsRunningSomewhereOtherThanBGMApp:
         case kAudioDeviceCustomPropertyAppVolumes:
+        case kAudioDeviceCustomPropertyAppRouting:
         case kAudioDeviceCustomPropertyEnabledOutputControls:
 			theAnswer = true;
 			break;
@@ -374,6 +375,7 @@ bool	BGM_Device::Device_IsPropertySettable(AudioObjectID inObjectID, pid_t inCli
         case kAudioDeviceCustomPropertyMusicPlayerProcessID:
         case kAudioDeviceCustomPropertyMusicPlayerBundleID:
         case kAudioDeviceCustomPropertyAppVolumes:
+        case kAudioDeviceCustomPropertyAppRouting:
         case kAudioDeviceCustomPropertyEnabledOutputControls:
 			theAnswer = true;
 			break;
@@ -461,7 +463,7 @@ UInt32	BGM_Device::Device_GetPropertyDataSize(AudioObjectID inObjectID, pid_t in
             break;
             
         case kAudioObjectPropertyCustomPropertyInfoList:
-            theAnswer = sizeof(AudioServerPlugInCustomPropertyInfo) * 6;
+            theAnswer = sizeof(AudioServerPlugInCustomPropertyInfo) * 7;
             break;
             
         case kAudioDeviceCustomPropertyDeviceAudibleState:
@@ -481,6 +483,10 @@ UInt32	BGM_Device::Device_GetPropertyDataSize(AudioObjectID inObjectID, pid_t in
             break;
             
         case kAudioDeviceCustomPropertyAppVolumes:
+            theAnswer = sizeof(CFPropertyListRef);
+            break;
+
+        case kAudioDeviceCustomPropertyAppRouting:
             theAnswer = sizeof(CFPropertyListRef);
             break;
 
@@ -888,9 +894,9 @@ void	BGM_Device::Device_GetPropertyData(AudioObjectID inObjectID, pid_t inClient
             theNumberItemsToFetch = inDataSize / sizeof(AudioServerPlugInCustomPropertyInfo);
             
             //	clamp it to the number of items we have
-            if(theNumberItemsToFetch > 6)
+            if(theNumberItemsToFetch > 7)
             {
-                theNumberItemsToFetch = 6;
+                theNumberItemsToFetch = 7;
             }
             
             if(theNumberItemsToFetch > 0)
@@ -928,6 +934,12 @@ void	BGM_Device::Device_GetPropertyData(AudioObjectID inObjectID, pid_t inClient
                 ((AudioServerPlugInCustomPropertyInfo*)outData)[5].mSelector = kAudioDeviceCustomPropertyEnabledOutputControls;
                 ((AudioServerPlugInCustomPropertyInfo*)outData)[5].mPropertyDataType = kAudioServerPlugInCustomPropertyDataTypeCFPropertyList;
                 ((AudioServerPlugInCustomPropertyInfo*)outData)[5].mQualifierDataType = kAudioServerPlugInCustomPropertyDataTypeNone;
+            }
+            if(theNumberItemsToFetch > 6)
+            {
+                ((AudioServerPlugInCustomPropertyInfo*)outData)[6].mSelector = kAudioDeviceCustomPropertyAppRouting;
+                ((AudioServerPlugInCustomPropertyInfo*)outData)[6].mPropertyDataType = kAudioServerPlugInCustomPropertyDataTypeCFPropertyList;
+                ((AudioServerPlugInCustomPropertyInfo*)outData)[6].mQualifierDataType = kAudioServerPlugInCustomPropertyDataTypeNone;
             }
 
             outDataSize = theNumberItemsToFetch * sizeof(AudioServerPlugInCustomPropertyInfo);
@@ -975,6 +987,15 @@ void	BGM_Device::Device_GetPropertyData(AudioObjectID inObjectID, pid_t inClient
                 ThrowIf(inDataSize < sizeof(CFArrayRef), CAException(kAudioHardwareBadPropertySizeError), "BGM_Device::Device_GetPropertyData: not enough space for the return value of kAudioDeviceCustomPropertyAppVolumes for the device");
                 CAMutex::Locker theStateLocker(mStateMutex);
                 *reinterpret_cast<CFArrayRef*>(outData) = mClients.CopyClientRelativeVolumesAsAppVolumes().GetCFArray();
+                outDataSize = sizeof(CFArrayRef);
+            }
+            break;
+
+        case kAudioDeviceCustomPropertyAppRouting:
+            {
+                ThrowIf(inDataSize < sizeof(CFArrayRef), CAException(kAudioHardwareBadPropertySizeError), "BGM_Device::Device_GetPropertyData: not enough space for the return value of kAudioDeviceCustomPropertyAppRouting for the device");
+                CAMutex::Locker theStateLocker(mStateMutex);
+                *reinterpret_cast<CFArrayRef*>(outData) = mClients.CopyRoutesAsArray();
                 outDataSize = sizeof(CFArrayRef);
             }
             break;
@@ -1110,6 +1131,34 @@ void	BGM_Device::Device_SetPropertyData(AudioObjectID inObjectID, pid_t inClient
                     // Send notification
                     CADispatchQueue::GetGlobalSerialQueue().Dispatch(false,	^{
                         AudioObjectPropertyAddress theChangedProperties[] = { kBGMAppVolumesAddress };
+                        BGM_PlugIn::Host_PropertiesChanged(inObjectID, 1, theChangedProperties);
+                    });
+                }
+            }
+            break;
+
+        case kAudioDeviceCustomPropertyAppRouting:
+            {
+                ThrowIf(inDataSize < sizeof(CFArrayRef), CAException(kAudioHardwareBadPropertySizeError), "BGM_Device::Device_SetPropertyData: wrong size for the data for kAudioDeviceCustomPropertyAppRouting");
+                
+                CFArrayRef arrayRef = *reinterpret_cast<const CFArrayRef*>(inData);
+
+                ThrowIfNULL(arrayRef, CAException(kAudioHardwareIllegalOperationError), "BGM_Device::Device_SetPropertyData: kAudioDeviceCustomPropertyAppRouting cannot be set to NULL");
+                ThrowIf(CFGetTypeID(arrayRef) != CFArrayGetTypeID(), CAException(kAudioHardwareIllegalOperationError), "BGM_Device::Device_SetPropertyData: CFType given for kAudioDeviceCustomPropertyAppRouting was not a CFArray");
+                
+                CACFArray array(arrayRef, false);
+
+                bool propertyWasChanged = false;
+
+                CAMutex::Locker theStateLocker(mStateMutex);
+
+                propertyWasChanged = mClients.SetRoutesFromArray(array);
+                
+                if(propertyWasChanged)
+                {
+                    // Send notification
+                    CADispatchQueue::GetGlobalSerialQueue().Dispatch(false, ^{
+                        AudioObjectPropertyAddress theChangedProperties[] = { kBGMAppRoutingAddress };
                         BGM_PlugIn::Host_PropertiesChanged(inObjectID, 1, theChangedProperties);
                     });
                 }
@@ -1358,18 +1407,27 @@ void	BGM_Device::DoIOOperation(AudioObjectID inStreamObjectID, UInt32 inClientID
             {
                 CAMutex::Locker theIOLocker(mIOMutex);
 
-                // Copy the audio data out of our ring buffer.
-                //
-                // Take the IO mutex because, in testing, not taking it seemed to make this function
-                // occasionally miss its deadline and cause an audio glitch. It's hard to be sure
-                // that was actually the cause, but it's probably not worth the risk anyway.
-                //
-                // If an IO operation misses its deadline, the host will log this message:
-                //     Audio IO Overload inputs: '<private>' outputs: '<private>' cause: 'Unknown'
-                //     prewarming: no recovering: no
-                ReadInputData(inIOBufferFrameSize,
-                              inIOCycleInfo.mInputTime.mSampleTime,
-                              ioMainBuffer);
+                // Check if this client has incoming routes
+                // If so, it should receive ONLY the routed audio, not the full loopback
+                bool hasIncomingRoutes = mClients.HasIncomingRoutesRT(inClientID);
+                
+                if(hasIncomingRoutes)
+                {
+                    // Zero the buffer first, then mix in only routed audio
+                    memset(ioMainBuffer, 0, inIOBufferFrameSize * sizeof(Float32) * 2);
+                    
+                    // Mix in audio specifically routed to this client
+                    mClients.MixRoutedAudioRT(inClientID, 
+                                              reinterpret_cast<Float32*>(ioMainBuffer), 
+                                              inIOBufferFrameSize);
+                }
+                else
+                {
+                    // No incoming routes - provide the normal loopback of all apps
+                    ReadInputData(inIOBufferFrameSize,
+                                  inIOCycleInfo.mInputTime.mSampleTime,
+                                  ioMainBuffer);
+                }
             }
 			break;
             
@@ -1383,7 +1441,18 @@ void	BGM_Device::DoIOOperation(AudioObjectID inStreamObjectID, UInt32 inClientID
 												 inIOBufferFrameSize,
 												 inIOCycleInfo.mOutputTime.mSampleTime,
 												 reinterpret_cast<const Float32*>(ioMainBuffer));
+                
+                // Store this client's audio to its routing buffer BEFORE volume is applied
+                // This ensures routed audio has full signal even when volume to master is 0
+                // We always store - the routing decision is made in ReadInput
+                mClients.StoreClientAudioRT(inClientID, 
+                                            reinterpret_cast<const Float32*>(ioMainBuffer), 
+                                            inIOBufferFrameSize);
+                
+                // NOTE: Do NOT mix routed audio here! ProcessOutput is the app's OUTPUT to master.
+                // Routed audio is delivered via ReadInput (the app's INPUT from driver).
             }
+            // Apply volume, pan, and EQ to this client's audio (for master output)
             ApplyClientRelativeVolume(inClientID, inIOBufferFrameSize, ioMainBuffer);
             break;
 

@@ -28,9 +28,30 @@
 
 // System Includes
 #include <CoreAudio/AudioServerPlugIn.h>
+#include <vector>
+#include <atomic>
 
 
 #pragma clang assume_nonnull begin
+
+//==================================================================================================
+//	BGM_AudioRoute
+//
+//  Represents a single audio route from one client's output to another client's input
+//==================================================================================================
+
+struct BGM_AudioRoute
+{
+    pid_t       mSourcePID = 0;         // Source client process ID
+    pid_t       mDestPID = 0;           // Destination client process ID  
+    Float32     mGain = 1.0f;           // Routing gain (0.0 to 1.0+)
+    bool        mEnabled = false;       // Is the route active
+    
+    bool operator==(const BGM_AudioRoute& other) const {
+        return mSourcePID == other.mSourcePID && 
+               mDestPID == other.mDestPID;
+    }
+};
 
 //==================================================================================================
 //	BGM_Client
@@ -94,6 +115,28 @@ public:
     Float32                       mEQMidDelayR[2] = {0.0f, 0.0f};
     Float32                       mEQHighDelayL[2] = {0.0f, 0.0f};
     Float32                       mEQHighDelayR[2] = {0.0f, 0.0f};
+    
+    // Per-client ring buffer for inter-app routing (stores this client's processed audio)
+    // Other clients can read from this buffer if they have routes configured
+    // Buffer is allocated lazily when first route to this client is created
+    static constexpr UInt32       kRoutingBufferFrames = 4096;
+    static constexpr UInt32       kRoutingBufferChannels = 2;
+    Float32*                      mRoutingBuffer = nullptr;        // [kRoutingBufferFrames * kRoutingBufferChannels]
+    std::atomic<UInt64>           mRoutingBufferWritePos{0};       // Current write position in frames
+    Float64                       mRoutingBufferSampleTime = 0.0;  // Sample time of last write
+    bool                          mRoutingBufferAllocated = false;
+    
+    // Routes FROM this client to other clients
+    std::vector<BGM_AudioRoute>   mOutgoingRoutes;
+    
+    // Allocate routing buffer (called when first route involving this client is created)
+    void                          AllocateRoutingBuffer();
+    // Deallocate routing buffer
+    void                          DeallocateRoutingBuffer();
+    // Store processed audio into routing buffer
+    void                          StoreToRoutingBuffer(const Float32* inBuffer, UInt32 inFrameCount, Float64 inSampleTime);
+    // Fetch audio from routing buffer for a specific channel
+    Float32                       FetchFromRoutingBuffer(SInt32 inChannel, UInt64 inSampleOffset) const;
     
 };
 

@@ -147,6 +147,13 @@ public:
     bool                                                SetClientsEQ(pid_t inAppPID, Float32 inLowGain, Float32 inMidGain, Float32 inHighGain, Float64 inSampleRate);
     bool                                                SetClientsEQ(CACFString inAppBundleID, Float32 inLowGain, Float32 inMidGain, Float32 inHighGain, Float64 inSampleRate);
     
+    // Routing buffer management
+    void                                                AllocateRoutingBufferForPID(pid_t inAppPID);
+    void                                                DeallocateRoutingBufferForPID(pid_t inAppPID);
+    
+    // Get client by PID for routing (RT-safe)
+    BGM_Client* _Nullable                               GetClientByPIDRT(pid_t inAppPID) const;
+    
     void                                                StartIONonRT(UInt32 inClientID) { UpdateClientIOStateNonRT(inClientID, true); }
     void                                                StopIONonRT(UInt32 inClientID) { UpdateClientIOStateNonRT(inClientID, false); }
     
