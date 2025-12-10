@@ -561,6 +561,11 @@ private func passthroughOutputIOProc(
         }
     }
     
+    // Write to master recording if active (after all processing, this is what goes to speakers)
+    if RecordingContext.shared.isMasterRecording {
+        RecordingContext.shared.writeMasterAudio(buffer: floatData, frameCount: frameCount)
+    }
+    
     // Calculate peak levels for meters (interleaved stereo: L R L R L R...)
     var peakL: Float = 0
     var peakR: Float = 0

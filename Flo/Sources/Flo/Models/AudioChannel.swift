@@ -150,6 +150,14 @@ final class AudioChannel: ObservableObject, Identifiable {
         didSet { onEQChanged?(eqLowGain, eqMidGain, eqHighGain) }
     }
     
+    // MARK: - Recording
+    
+    /// Is this channel currently being recorded
+    @Published var isRecording: Bool = false
+    
+    /// Recording start time (for duration display)
+    @Published var recordingStartTime: Date?
+    
     // MARK: - Metering
     
     /// Current peak level for left channel (0.0 to 1.0+)

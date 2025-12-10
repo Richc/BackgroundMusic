@@ -62,7 +62,7 @@ enum FloColors {
     // MARK: - Button States
     
     /// Mute button active
-    static let muteActive = Color.red
+    static let muteActive = Color.green
     
     /// Mute button inactive
     static let muteInactive = Color(white: 0.3)
@@ -282,28 +282,94 @@ struct SoloButtonStyle: ButtonStyle {
     }
 }
 
+struct RecordButtonStyle: ButtonStyle {
+    var isRecording: Bool
+    
+    func makeBody(configuration: Configuration) -> some View {
+        Text("R")
+            .font(FloTypography.buttonLabel)
+            .foregroundColor(isRecording ? .white : Color.red)
+            .frame(width: FloDimensions.buttonSize, height: FloDimensions.buttonSize)
+            .background(isRecording ? Color.red : FloColors.muteInactive)
+            .cornerRadius(FloDimensions.buttonCornerRadius)
+            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
+    }
+}
+
+// MARK: - Global Tooltip Window Manager
+
+class TooltipWindowManager {
+    static let shared = TooltipWindowManager()
+    
+    private var tooltipWindow: NSWindow?
+    private var hostingView: NSHostingView<TooltipBubble>?
+    
+    private init() {}
+    
+    func show(_ text: String, at screenPoint: CGPoint) {
+        // Create or update the tooltip window
+        if tooltipWindow == nil {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 300, height: 60),
+                styleMask: .borderless,
+                backing: .buffered,
+                defer: false
+            )
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.level = .floating
+            window.ignoresMouseEvents = true
+            window.hasShadow = false
+            tooltipWindow = window
+        }
+        
+        let bubble = TooltipBubble(text: text)
+        let hostingView = NSHostingView(rootView: bubble)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 300, height: 60)
+        
+        // Size to fit content
+        let fittingSize = hostingView.fittingSize
+        hostingView.frame = NSRect(x: 0, y: 0, width: fittingSize.width, height: fittingSize.height)
+        
+        tooltipWindow?.contentView = hostingView
+        tooltipWindow?.setContentSize(fittingSize)
+        
+        // Position above the element (screen coordinates, with Y flipped for macOS)
+        let windowX = screenPoint.x - fittingSize.width / 2
+        let windowY = screenPoint.y + 10  // Above the element
+        tooltipWindow?.setFrameOrigin(NSPoint(x: windowX, y: windowY))
+        
+        tooltipWindow?.orderFront(nil)
+    }
+    
+    func hide() {
+        tooltipWindow?.orderOut(nil)
+    }
+}
+
 // MARK: - Conditional Tooltip Modifier
 
 struct ConditionalTooltip: ViewModifier {
     let tooltip: String
     @AppStorage("showTooltips") private var showTooltips = false
-    @State private var isHovering = false
     
     func body(content: Content) -> some View {
         content
+            .contentShape(Rectangle())  // Ensure full area is hoverable
             .onHover { hovering in
-                if showTooltips {
-                    withAnimation(.easeOut(duration: 0.12)) {
-                        isHovering = hovering
+                guard showTooltips else { return }
+                if hovering {
+                    // Delay slightly to get accurate frame
+                    DispatchQueue.main.async {
+                        if let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }) {
+                            // Get mouse location in screen coordinates
+                            let mouseLocation = NSEvent.mouseLocation
+                            // Position tooltip above mouse
+                            TooltipWindowManager.shared.show(tooltip, at: CGPoint(x: mouseLocation.x, y: mouseLocation.y + 20))
+                        }
                     }
-                }
-            }
-            .overlay(alignment: .top) {
-                if showTooltips && isHovering {
-                    TooltipBubble(text: tooltip)
-                        .offset(y: -44)
-                        .zIndex(9999)
-                        .allowsHitTesting(false)
+                } else {
+                    TooltipWindowManager.shared.hide()
                 }
             }
     }

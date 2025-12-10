@@ -13,6 +13,7 @@ struct MixerView: View {
     @EnvironmentObject var oscService: OSCService
     @EnvironmentObject var presetStore: PresetStore
     @ObservedObject var crossfaderStore = CrossfaderStore.shared
+    @StateObject private var audioRecorder = AudioRecorder.shared
     
     @State private var selectedChannelID: UUID?
     @State private var showingPreferences = false
@@ -22,6 +23,12 @@ struct MixerView: View {
     @State private var newSceneName = ""
     @State private var channelsMutedBySolo: Set<UUID> = []  // Track channels muted by solo
     @State private var currentSoloedChannelID: UUID? = nil  // Track which channel is currently soloed
+    
+    // Recording settings
+    @State private var showingRecordSettings = false
+    @State private var pendingRecordChannel: AudioChannel? = nil
+    @State private var recordingFileName = ""
+    @State private var recordingPath: URL = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first!.appendingPathComponent("Flo Recordings")
     
     var body: some View {
         VStack(spacing: 0) {
@@ -40,7 +47,11 @@ struct MixerView: View {
                                 channel: channel,
                                 isSelected: channel.id == selectedChannelID,
                                 onRemove: {
-                                    audioEngine.removeManagedApp(bundleID: channel.identifier)
+                                    if channel.channelType == .inputDevice {
+                                        audioEngine.removeChannel(channel)
+                                    } else {
+                                        audioEngine.removeManagedApp(bundleID: channel.identifier)
+                                    }
                                 },
                                 availableTargets: audioEngine.channels.filter { $0.channelType == .application },
                                 onRoutingChanged: { source, targetId, inputCh, enabled in
@@ -110,7 +121,7 @@ struct MixerView: View {
                 // Master section
                 if let master = audioEngine.masterChannel {
                     VStack(spacing: 8) {
-                        MasterSectionView(channel: master)
+                        MasterSectionView(channel: master, onRecordChanged: toggleMasterRecording)
                         
                         // Crossfader (hidden feature)
                         if crossfaderStore.isEnabled {
@@ -152,12 +163,106 @@ struct MixerView: View {
                 }
             )
         }
+        .sheet(isPresented: $showingRecordSettings) {
+            RecordSettingsSheet(
+                channelName: pendingRecordChannel?.name ?? "Master Mix",
+                fileName: $recordingFileName,
+                recordingPath: $recordingPath,
+                onRecord: {
+                    startRecordingWithSettings()
+                },
+                onCancel: {
+                    pendingRecordChannel = nil
+                    showingRecordSettings = false
+                }
+            )
+        }
+    }
+    
+    // MARK: - Recording
+    
+    private func showRecordSettings(for channel: AudioChannel) {
+        // Generate default filename with date and channel name
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let timestamp = dateFormatter.string(from: Date())
+        let safeName = channel.name.replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        recordingFileName = "\(safeName)_\(timestamp)"
+        pendingRecordChannel = channel
+        showingRecordSettings = true
+    }
+    
+    private func startRecordingWithSettings() {
+        guard let channel = pendingRecordChannel else { return }
+        
+        // Ensure directory exists
+        try? FileManager.default.createDirectory(at: recordingPath, withIntermediateDirectories: true)
+        
+        let finalFileName = recordingFileName.isEmpty ? channel.name : recordingFileName
+        
+        // Check if this is master channel - use special master recording path
+        if channel.channelType == .master {
+            do {
+                // Create the full file path for master recording
+                let fullPath = recordingPath.appendingPathComponent("\(finalFileName).wav")
+                try RecordingContext.shared.startMasterRecording(sampleRate: 44100, savePath: fullPath)
+                channel.isRecording = true
+                channel.recordingStartTime = Date()
+                print("🔴 Started master recording: \(finalFileName) at \(fullPath.path)")
+            } catch {
+                print("❌ Failed to start master recording: \(error.localizedDescription)")
+            }
+        } else {
+            // Regular channel recording
+            do {
+                try audioRecorder.startRecording(
+                    channelId: channel.id,
+                    channelName: finalFileName,
+                    sampleRate: 44100,
+                    savePath: recordingPath
+                )
+                channel.isRecording = true
+                channel.recordingStartTime = Date()
+                
+                // Register with recording context for audio thread access
+                if let session = audioRecorder.session(for: channel.id) {
+                    RecordingContext.shared.registerSession(session, for: channel.id)
+                }
+                
+                print("🔴 Started recording: \(finalFileName)")
+            } catch {
+                print("❌ Failed to start recording: \(error.localizedDescription)")
+            }
+        }
+        
+        pendingRecordChannel = nil
+        showingRecordSettings = false
+    }
+    
+    private func toggleMasterRecording() {
+        if let master = audioEngine.masterChannel {
+            if master.isRecording {
+                RecordingContext.shared.stopMasterRecording()
+                master.isRecording = false
+                master.recordingStartTime = nil
+                print("⏹️ Stopped master recording")
+            } else {
+                guard audioRecorder.activeCount < AudioRecorder.maxRecordings else {
+                    print("⚠️ Maximum recordings (\(AudioRecorder.maxRecordings)) reached")
+                    return
+                }
+                
+                // Show settings dialog for master recording
+                showRecordSettings(for: master)
+            }
+        }
     }
     
     // MARK: - Visible Channels
     
     private var visibleChannels: [AudioChannel] {
-        audioEngine.channels.filter { $0.channelType == .application }
+        audioEngine.channels.filter { $0.channelType == .application || $0.channelType == .inputDevice }
     }
     
     // MARK: - Control Protocol Status
@@ -181,33 +286,31 @@ struct MixerView: View {
     private static let logoImage: NSImage? = {
         // Try Bundle.module first (SPM resource bundle)
         if let bundleURL = Bundle.main.url(forResource: "Flo_Flo", withExtension: "bundle"),
-           let resourceBundle = Bundle(url: bundleURL),
-           let logoPath = resourceBundle.path(forResource: "FloLogo", ofType: "png"),
-           let image = NSImage(contentsOfFile: logoPath) {
-            return image
-        }
-        
-        // Also try looking in the same directory as the executable (SPM debug build)
-        let executablePath = Bundle.main.executablePath ?? ""
-        let execDir = (executablePath as NSString).deletingLastPathComponent
-        let spmBundlePath = execDir + "/Flo_Flo.bundle/FloLogo.png"
-        if let image = NSImage(contentsOfFile: spmBundlePath) {
-            return image
-        }
-        
-        // Try app bundle Resources folder
-        let resourcesPath = (execDir as NSString).deletingLastPathComponent + "/Resources"
-        let logoPath = resourcesPath + "/FloLogo.png"
-        if let image = NSImage(contentsOfFile: logoPath) {
-            return image
-        }
-        
-        // Fallback: try Bundle.main.resourcePath
-        if let resourcePath = Bundle.main.resourcePath {
-            let fallbackPath = "\(resourcePath)/FloLogo.png"
-            if let image = NSImage(contentsOfFile: fallbackPath) {
+           let resourceBundle = Bundle(url: bundleURL) {
+            // Try "Flo icon.icns" first (app icon for main window)
+            if let icnsPath = resourceBundle.path(forResource: "Flo icon", ofType: "icns"),
+               let image = NSImage(contentsOfFile: icnsPath) {
                 return image
             }
+            // Fallback to boombox
+            if let boomboxPath = resourceBundle.path(forResource: "flo boombox", ofType: "png"),
+               let image = NSImage(contentsOfFile: boomboxPath) {
+                return image
+            }
+        }
+        
+        // Try direct path in executable directory (SPM debug build)
+        let executablePath = Bundle.main.executablePath ?? ""
+        let execDir = (executablePath as NSString).deletingLastPathComponent
+        let icnsPath = execDir + "/Flo_Flo.bundle/Flo icon.icns"
+        if let image = NSImage(contentsOfFile: icnsPath) {
+            return image
+        }
+        
+        // Fallback to boombox
+        let boomboxPath = execDir + "/Flo_Flo.bundle/flo boombox.png"
+        if let image = NSImage(contentsOfFile: boomboxPath) {
+            return image
         }
         
         return nil
@@ -215,20 +318,8 @@ struct MixerView: View {
     
     private var toolbarView: some View {
         HStack {
-            // Logo
-            if let logoImage = Self.logoImage {
-                Image(nsImage: logoImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 24, height: 24)
-            } else {
-                Image(systemName: "waveform")
-                    .font(.title2)
-                    .foregroundColor(FloColors.brand)
-            }
-            
             Text("Flo")
-                .font(.headline)
+                .font(.system(size: 20, weight: .bold))
             
             Spacer()
             
@@ -247,7 +338,7 @@ struct MixerView: View {
                 }
             }
             .buttonStyle(.plain)
-            .floTooltip("MIDI & OSC settings")
+            .floTooltip("Configure MIDI & OSC remote control")
             .popover(isPresented: $showingControlSettings) {
                 ControlSettingsPopover()
                     .environmentObject(midiService)
@@ -260,7 +351,7 @@ struct MixerView: View {
                 Image(systemName: "gear")
             }
             .buttonStyle(.plain)
-            .floTooltip("Mixer preferences")
+            .floTooltip("App settings & preferences")
             .popover(isPresented: $showingPreferences) {
                 MixerSettingsPopoverView()
                     .environmentObject(audioEngine)
@@ -348,7 +439,7 @@ struct ChannelStripView: View {
                 .opacity(isInactive ? 0.5 : 1.0)
                 .allowsHitTesting(!isInactive)
                 .zIndex(1)
-                .floTooltip("🎚️ Pump up the volume!")
+                .floTooltip("🎚️ Adjust channel volume")
             
             // Volume display
             Text(channel.volumeDBFormatted)
@@ -360,20 +451,20 @@ struct ChannelStripView: View {
                 .frame(width: FloDimensions.knobDiameter, height: FloDimensions.knobDiameter)
                 .opacity(isInactive ? 0.5 : 1.0)
                 .allowsHitTesting(!isInactive)
-                .floTooltip("👈 Pan left or right 👉")
+                .floTooltip("👈 Pan left/right in stereo field 👉")
             
             Text("Pan")
                 .font(.system(size: 8))
                 .foregroundColor(FloColors.textTertiary)
             
-            // Mute/Solo buttons
+            // Mute/Solo/Record buttons
             HStack(spacing: 4) {
                 Button("M") {
                     channel.isMuted.toggle()
                 }
                 .buttonStyle(MuteButtonStyle(isActive: channel.isMuted))
                 .disabled(isInactive)
-                .floTooltip("🤫 Shhhh! Mute this channel")
+                .floTooltip("🔇 Mute this channel (M)")
                 
                 Button("S") {
                     channel.isSoloed.toggle()
@@ -381,18 +472,15 @@ struct ChannelStripView: View {
                 }
                 .buttonStyle(SoloButtonStyle(isActive: channel.isSoloed))
                 .disabled(isInactive)
-                .floTooltip("🎤 Solo time! Hear only this")
+                .floTooltip("🎤 Solo - hear only this channel (S)")
             }
             .opacity(isInactive ? 0.5 : 1.0)
         }
         .padding(8)
         .channelStripStyle(isSelected: isSelected, isInactive: isInactive)
-        .onHover { hovering in
-            isHovering = hovering
-        }
         .overlay(alignment: .topTrailing) {
             // Remove button on hover
-            if isHovering && onRemove != nil {
+            if onRemove != nil {
                 Button {
                     onRemove?()
                 } label: {
@@ -402,8 +490,13 @@ struct ChannelStripView: View {
                 }
                 .buttonStyle(.plain)
                 .padding(4)
-                .floTooltip("Remove from mixer")
+                .opacity(isHovering ? 1 : 0)
+                .allowsHitTesting(isHovering)
+                .floTooltip("Remove channel from mixer")
             }
+        }
+        .onHover { hovering in
+            isHovering = hovering
         }
     }
     
@@ -411,7 +504,7 @@ struct ChannelStripView: View {
         VStack(spacing: 4) {
             // Clickable icon area for routing
             Button(action: {
-                if channel.channelType == .application && !isInactive {
+                if (channel.channelType == .application || channel.channelType == .inputDevice) && !isInactive {
                     showRoutingPopover = true
                 }
             }) {
@@ -467,8 +560,11 @@ struct ChannelStripView: View {
                         .frame(width: 28, height: 28)
                     }
                 }
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .floTooltip("\(channel.name) - click to route audio")
             .popover(isPresented: $showRoutingPopover, arrowEdge: .bottom) {
                 RoutingPopoverView(
                     sourceChannel: channel,
@@ -968,9 +1064,148 @@ struct AddAppButton: View {
             }
             .frame(width: FloDimensions.channelWidth)
             .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .floTooltip("Add an app to the mixer!")
+        .floTooltip("Add an app or mic input to the mixer")
+    }
+}
+
+// MARK: - Recording Duration View
+
+struct RecordingDurationView: View {
+    let startTime: Date
+    
+    var body: some View {
+        TimelineView(.periodic(from: startTime, by: 1.0)) { context in
+            HStack(spacing: 2) {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 6, height: 6)
+                Text(formattedDuration(at: context.date))
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.red)
+            }
+        }
+    }
+    
+    private func formattedDuration(at date: Date) -> String {
+        let elapsed = date.timeIntervalSince(startTime)
+        let minutes = Int(elapsed) / 60
+        let seconds = Int(elapsed) % 60
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+// MARK: - Record Settings Sheet
+
+struct RecordSettingsSheet: View {
+    let channelName: String
+    @Binding var fileName: String
+    @Binding var recordingPath: URL
+    let onRecord: () -> Void
+    let onCancel: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            // Header
+            HStack {
+                Image(systemName: "record.circle")
+                    .foregroundColor(.red)
+                    .font(.title2)
+                Text("Record Settings")
+                    .font(.headline)
+            }
+            .padding(.top)
+            
+            Divider()
+            
+            // Channel info
+            HStack {
+                Text("Recording:")
+                    .foregroundColor(.secondary)
+                Text(channelName)
+                    .fontWeight(.medium)
+                Spacer()
+            }
+            .padding(.horizontal)
+            
+            // File name
+            VStack(alignment: .leading, spacing: 4) {
+                Text("File Name")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                TextField("Enter file name", text: $fileName)
+                    .textFieldStyle(.roundedBorder)
+            }
+            .padding(.horizontal)
+            
+            // Save location
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Save Location")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                HStack {
+                    Text(recordingPath.path)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    Button("Choose...") {
+                        chooseFolder()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding(.horizontal)
+            
+            // Format info
+            HStack {
+                Text("Format:")
+                    .foregroundColor(.secondary)
+                Text("WAV (16-bit PCM)")
+                    .font(.system(size: 12, design: .monospaced))
+                Spacer()
+            }
+            .padding(.horizontal)
+            
+            Divider()
+            
+            // Buttons
+            HStack {
+                Button("Cancel") {
+                    onCancel()
+                }
+                .keyboardShortcut(.cancelAction)
+                
+                Spacer()
+                
+                Button("Start Recording") {
+                    onRecord()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+        }
+        .frame(width: 400)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+    
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Select"
+        panel.message = "Choose a folder to save recordings"
+        
+        if panel.runModal() == .OK, let url = panel.url {
+            recordingPath = url
+        }
     }
 }
 
@@ -979,6 +1214,7 @@ struct AddAppButton: View {
 struct MasterSectionView: View {
     @ObservedObject var channel: AudioChannel
     var isSelected: Bool = false
+    var onRecordChanged: (() -> Void)? = nil
     
     var body: some View {
         VStack(spacing: 8) {
@@ -1007,12 +1243,27 @@ struct MasterSectionView: View {
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundColor(FloColors.textPrimary)
             
-            // Mute button
-            Button("M") {
-                channel.isMuted.toggle()
+            // Mute and Record buttons
+            HStack(spacing: 4) {
+                Button("M") {
+                    channel.isMuted.toggle()
+                }
+                .buttonStyle(MuteButtonStyle(isActive: channel.isMuted))
+                .floTooltip("🔇 Silence everything!")
+                
+                Button {
+                    onRecordChanged?()
+                } label: {
+                    Text("R")
+                }
+                .buttonStyle(RecordButtonStyle(isRecording: channel.isRecording))
+                .floTooltip(channel.isRecording ? "⏹️ Stop recording mix" : "🔴 Record the master mix")
             }
-            .buttonStyle(MuteButtonStyle(isActive: channel.isMuted))
-            .floTooltip("🔇 Silence everything!")
+            
+            // Recording duration display
+            if channel.isRecording, let startTime = channel.recordingStartTime {
+                RecordingDurationView(startTime: startTime)
+            }
         }
         .padding(12)
         .frame(width: 100)

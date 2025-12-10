@@ -475,6 +475,38 @@ final class AudioEngine: ObservableObject {
         appStore.availableAppsToAdd()
     }
     
+    // MARK: - Input Channels
+    
+    /// Add an input device as a channel
+    func addInputChannel(device: AudioDevice) {
+        // Check if already added
+        guard !channels.contains(where: { $0.channelType == .inputDevice && $0.identifier == device.id }) else {
+            return
+        }
+        
+        let channel = AudioChannel(
+            channelType: .inputDevice,
+            identifier: device.id,
+            name: device.name,
+            icon: NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "Microphone")
+        )
+        // Input devices start muted by default to prevent feedback
+        channel.isMuted = true
+        channels.append(channel)
+        print("🎤 Added input channel: \(device.name) (muted)")
+    }
+    
+    /// Remove a channel from the mixer
+    func removeChannel(_ channel: AudioChannel) {
+        if channel.channelType == .inputDevice {
+            channels.removeAll { $0.id == channel.id }
+            print("🎤 Removed input channel: \(channel.name)")
+        } else if channel.channelType == .application {
+            // For app channels, remove from managed apps
+            removeManagedApp(bundleID: channel.identifier)
+        }
+    }
+    
     // MARK: - Meter Updates
     
     private func startMeterUpdates() {
@@ -854,9 +886,13 @@ final class AudioEngine: ObservableObject {
             .filter { $0.channelType == .application }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         
+        let inputChannels = channels
+            .filter { $0.channelType == .inputDevice }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        
         let master = channels.filter { $0.channelType == .master }
         
-        return appChannels + master
+        return appChannels + inputChannels + master
     }
     
     /// Get channel by identifier
