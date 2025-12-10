@@ -347,17 +347,20 @@ struct ChannelStripView: View {
         VStack(spacing: 6) {
             // Icon and name with remove button - now clickable for routing
             channelHeader
+                .zIndex(10)  // Keep header above fader
             
             // Per-channel 3-band EQ (where meters used to be)
             ChannelEQView(channel: channel)
                 .opacity(isInactive ? 0.5 : 1.0)
                 .allowsHitTesting(!isInactive)
+                .zIndex(10)  // Keep EQ above fader
             
-            // Fader
+            // Fader - lower z-index so it doesn't overlap EQ knobs
             FaderView(value: $channel.volume, maxValue: 1.0)
                 .frame(height: ManateeDimensions.faderHeight + 40)
                 .opacity(isInactive ? 0.5 : 1.0)
                 .allowsHitTesting(!isInactive)
+                .zIndex(1)
             
             // Volume display
             Text(channel.volumeDBFormatted)
@@ -981,6 +984,7 @@ struct AddAppButton: View {
 
 struct MasterSectionView: View {
     @ObservedObject var channel: AudioChannel
+    var isSelected: Bool = false
     
     var body: some View {
         VStack(spacing: 8) {
@@ -1000,6 +1004,7 @@ struct MasterSectionView: View {
             // Fader (master keeps boost range)
             FaderView(value: $channel.volume, maxValue: 1.5)
                 .frame(height: ManateeDimensions.faderHeight + 20)
+                .zIndex(1)  // Ensure fader stays below other elements
             
             // Volume display
             Text(channel.volumeDBFormatted)
@@ -1014,8 +1019,14 @@ struct MasterSectionView: View {
         }
         .padding(12)
         .frame(width: 100)
-        .background(ManateeColors.channelBackground)
-        .cornerRadius(ManateeDimensions.cornerRadius)
+        .background(
+            RoundedRectangle(cornerRadius: ManateeDimensions.cornerRadius)
+                .fill(isSelected ? ManateeColors.channelBackgroundSelected : ManateeColors.channelBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: ManateeDimensions.cornerRadius)
+                        .stroke(isSelected ? ManateeColors.brand.opacity(0.5) : Color.clear, lineWidth: 1)
+                )
+        )
     }
 }
 
@@ -1430,14 +1441,15 @@ struct KnobView: View {
                         .rotationEffect(.degrees(135))
                 }
                 
-                // Knob body
+                // Knob body - darker to make indicator visible
                 Circle()
-                    .fill(isDragging ? ManateeColors.faderCapActive : ManateeColors.faderCap)
+                    .fill(isDragging ? Color(white: 0.4) : Color(white: 0.25))
                     .padding(4)
+                    .shadow(color: .black.opacity(0.3), radius: 1, y: 1)
                 
-                // Indicator line
+                // Indicator line - bright white for visibility
                 Rectangle()
-                    .fill(ManateeColors.textPrimary)
+                    .fill(Color.white)
                     .frame(width: 2, height: size/4)
                     .offset(y: -size/6)
                     .rotationEffect(angle)

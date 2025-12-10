@@ -21,11 +21,14 @@ enum ManateeColors {
     
     // MARK: - Channel Strip Colors
     
-    /// Background of a channel strip
-    static let channelBackground = Color(nsColor: .controlBackgroundColor)
+    /// Background of a channel strip (slightly lighter than window background)
+    static let channelBackground = Color(white: 0.18)
     
-    /// Elevated channel strip (selected)
-    static let channelBackgroundSelected = Color(nsColor: .selectedContentBackgroundColor)
+    /// Elevated channel strip (selected) - blue tint
+    static let channelBackgroundSelected = Color(hue: 0.58, saturation: 0.5, brightness: 0.4)
+    
+    /// Channel strip when inactive/grayed out - darker
+    static let channelBackgroundInactive = Color(white: 0.12)
     
     /// Fader track background
     static let faderTrack = Color(white: 0.15)
@@ -230,9 +233,24 @@ struct ChannelStripStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
             .frame(width: ManateeDimensions.channelWidth)
-            .background(isSelected ? ManateeColors.channelBackgroundSelected : ManateeColors.channelBackground)
-            .cornerRadius(ManateeDimensions.cornerRadius)
-            .opacity(isInactive ? 0.5 : 1.0)
+            .background(
+                RoundedRectangle(cornerRadius: ManateeDimensions.cornerRadius)
+                    .fill(backgroundColor)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: ManateeDimensions.cornerRadius)
+                            .stroke(isSelected ? ManateeColors.brand.opacity(0.5) : Color.clear, lineWidth: 1)
+                    )
+            )
+    }
+    
+    private var backgroundColor: Color {
+        if isInactive {
+            return ManateeColors.channelBackgroundInactive
+        } else if isSelected {
+            return ManateeColors.channelBackgroundSelected
+        } else {
+            return ManateeColors.channelBackground
+        }
     }
 }
 

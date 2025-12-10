@@ -205,9 +205,9 @@ private:
     static BGM_Device* __nonnull    sInstance;
     static BGM_Device* __nonnull    sUISoundsInstance;
     
-    #define kDeviceName                 "Manatee"
-    #define kDeviceName_UISounds        "Manatee (UI Sounds)"
-    #define kDeviceManufacturerName     "Manatee Audio"
+    #define kDeviceName                 "Flo Driver"
+    #define kDeviceName_UISounds        "Flo Driver (UI Sounds)"
+    #define kDeviceManufacturerName     "Flo Audio"
 
 	const CFStringRef __nonnull	mDeviceName;
 	const CFStringRef __nonnull mDeviceUID;

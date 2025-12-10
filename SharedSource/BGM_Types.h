@@ -41,16 +41,16 @@ static const char* const kBGMContributorsURL = "https://github.com/kyleneideck/B
 #pragma mark IDs
 
 // TODO: Change these and the other defines to const strings?
-#define kBGMDriverBundleID           "com.bearisdriving.BGM.Driver"
-#define kBGMAppBundleID              "com.bearisdriving.BGM.App"
-#define kBGMXPCHelperBundleID        "com.bearisdriving.BGM.XPCHelper"
+#define kBGMDriverBundleID           "com.flo.Driver"
+#define kBGMAppBundleID              "com.flo.Flo"
+#define kBGMXPCHelperBundleID        "com.flo.XPCHelper"
 
-#define kBGMDeviceUID                "ManateeDevice"
-#define kBGMDeviceModelUID           "ManateeDeviceModelUID"
-#define kBGMDeviceUID_UISounds       "ManateeDevice_UISounds"
-#define kBGMDeviceModelUID_UISounds  "ManateeDeviceModelUID_UISounds"
-#define kBGMNullDeviceUID            "ManateeNullDevice"
-#define kBGMNullDeviceModelUID       "ManateeNullDeviceModelUID"
+#define kBGMDeviceUID                "FloDevice"
+#define kBGMDeviceModelUID           "FloDeviceModelUID"
+#define kBGMDeviceUID_UISounds       "FloDevice_UISounds"
+#define kBGMDeviceModelUID_UISounds  "FloDeviceModelUID_UISounds"
+#define kBGMNullDeviceUID            "FloNullDevice"
+#define kBGMNullDeviceModelUID       "FloNullDeviceModelUID"
 
 // The object IDs for the audio objects this driver implements.
 //

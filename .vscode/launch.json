@@ -4,21 +4,21 @@
             "type": "swift",
             "request": "launch",
             "args": [],
-            "cwd": "${workspaceFolder:BackgroundMusic}/Manatee",
-            "name": "Debug Manatee (Manatee)",
-            "target": "Manatee",
+            "cwd": "${workspaceFolder:BackgroundMusic}/Flo",
+            "name": "Debug Flo (Flo)",
+            "target": "Flo",
             "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug Manatee (Manatee)"
+            "preLaunchTask": "swift: Build Debug Flo (Flo)"
         },
         {
             "type": "swift",
             "request": "launch",
             "args": [],
-            "cwd": "${workspaceFolder:BackgroundMusic}/Manatee",
-            "name": "Release Manatee (Manatee)",
-            "target": "Manatee",
+            "cwd": "${workspaceFolder:BackgroundMusic}/Flo",
+            "name": "Release Flo (Flo)",
+            "target": "Flo",
             "configuration": "release",
-            "preLaunchTask": "swift: Build Release Manatee (Manatee)"
+            "preLaunchTask": "swift: Build Release Flo (Flo)"
         }
     ]
 }
