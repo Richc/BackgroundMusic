@@ -278,6 +278,12 @@ struct MixerView: View {
                 Image(systemName: "gear")
             }
             .buttonStyle(.plain)
+            .popover(isPresented: $showingPreferences) {
+                MixerSettingsPopoverView()
+                    .environmentObject(audioEngine)
+                    .environmentObject(midiService)
+                    .environmentObject(oscService)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)

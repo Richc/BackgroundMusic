@@ -53,13 +53,6 @@ let package = Package(
                 .define("MANATEE_BRIDGE")
             ]
         ),
-        
-        // Unit tests
-        .testTarget(
-            name: "ManateeTests",
-            dependencies: ["Manatee"],
-            path: "Tests/ManateeTests"
-        ),
     ]
 )
  

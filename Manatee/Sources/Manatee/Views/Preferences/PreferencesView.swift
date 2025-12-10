@@ -231,9 +231,11 @@ struct AudioPreferencesView: View {
 
 struct MIDIPreferencesView: View {
     @EnvironmentObject var midiService: MIDIService
+    @EnvironmentObject var audioEngine: AudioEngine
     
     @AppStorage("midiEnabled") private var midiEnabled = true
     @AppStorage("midiSendFeedback") private var midiSendFeedback = true
+    @State private var showMappingEditor = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -279,11 +281,18 @@ struct MIDIPreferencesView: View {
             .frame(width: 250)
             
             HStack {
-                Button("Configure Mappings...") { }
+                Button("Configure Mappings...") {
+                    showMappingEditor = true
+                }
                 Button("Reset to Default") { }
             }
             
             Spacer()
+        }
+        .sheet(isPresented: $showMappingEditor) {
+            MIDIMappingEditorView()
+                .environmentObject(midiService)
+                .environmentObject(audioEngine)
         }
     }
 }

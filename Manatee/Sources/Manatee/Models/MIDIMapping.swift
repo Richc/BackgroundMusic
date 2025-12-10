@@ -38,6 +38,9 @@ enum ControlTarget: Codable, Hashable {
     case deviceMute(deviceUID: String)
     case masterVolume
     case masterMute
+    case eqLow
+    case eqMid
+    case eqHigh
     case sceneRecall(index: Int)
     case presetRecall(name: String)
     case bankNext
@@ -54,6 +57,9 @@ enum ControlTarget: Codable, Hashable {
         case .deviceMute(let uid): return "Device Mute: \(uid)"
         case .masterVolume: return "Master Volume"
         case .masterMute: return "Master Mute"
+        case .eqLow: return "EQ Low"
+        case .eqMid: return "EQ Mid"
+        case .eqHigh: return "EQ High"
         case .sceneRecall(let index): return "Scene \(index)"
         case .presetRecall(let name): return "Preset: \(name)"
         case .bankNext: return "Bank Next"

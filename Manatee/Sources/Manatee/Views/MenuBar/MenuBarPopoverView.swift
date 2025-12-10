@@ -9,8 +9,20 @@ import SwiftUI
 
 struct MenuBarPopoverView: View {
     @EnvironmentObject var audioEngine: AudioEngine
+    @EnvironmentObject var midiService: MIDIService
+    @State private var showSettings = false
     
     var body: some View {
+        if showSettings {
+            SettingsPopoverView(showSettings: $showSettings)
+                .environmentObject(audioEngine)
+                .environmentObject(midiService)
+        } else {
+            mainView
+        }
+    }
+    
+    private var mainView: some View {
         VStack(spacing: 0) {
             // Header
             headerView
@@ -185,7 +197,221 @@ struct MenuBarPopoverView: View {
     }
     
     private func openPreferences() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        showSettings = true
+    }
+}
+
+// MARK: - Settings Popover View
+
+struct SettingsPopoverView: View {
+    @EnvironmentObject var audioEngine: AudioEngine
+    @EnvironmentObject var midiService: MIDIService
+    @Binding var showSettings: Bool
+    @State private var selectedTab: SettingsTab = .general
+    
+    enum SettingsTab: String, CaseIterable {
+        case general = "General"
+        case midi = "MIDI"
+        case audio = "Audio"
+        case about = "About"
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header with back button
+            HStack {
+                Button {
+                    showSettings = false
+                } label: {
+                    Image(systemName: "chevron.left")
+                    Text("Back")
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.accentColor)
+                
+                Spacer()
+                
+                Text("Settings")
+                    .font(.headline)
+                
+                Spacer()
+                Spacer().frame(width: 50) // Balance the back button
+            }
+            .padding(12)
+            
+            Divider()
+            
+            // Tab picker
+            Picker("", selection: $selectedTab) {
+                ForEach(SettingsTab.allCases, id: \.self) { tab in
+                    Text(tab.rawValue).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            
+            Divider()
+            
+            // Content
+            ScrollView {
+                switch selectedTab {
+                case .general:
+                    GeneralSettingsContent()
+                case .midi:
+                    MIDISettingsContent()
+                        .environmentObject(midiService)
+                case .audio:
+                    AudioSettingsContent()
+                        .environmentObject(audioEngine)
+                case .about:
+                    AboutSettingsContent()
+                }
+            }
+            .frame(maxHeight: 350)
+        }
+        .frame(width: 320)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+// MARK: - Settings Content Views
+
+struct GeneralSettingsContent: View {
+    @AppStorage("launchAtLogin") private var launchAtLogin = false
+    @AppStorage("showInDock") private var showInDock = false
+    @AppStorage("colorScheme") private var colorScheme = "system"
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Toggle("Launch at login", isOn: $launchAtLogin)
+            Toggle("Show in Dock", isOn: $showInDock)
+            
+            Divider()
+            
+            Text("Appearance")
+                .font(.headline)
+            Picker("", selection: $colorScheme) {
+                Text("System").tag("system")
+                Text("Light").tag("light")
+                Text("Dark").tag("dark")
+            }
+            .pickerStyle(.segmented)
+            
+            Spacer()
+        }
+        .padding(16)
+    }
+}
+
+struct MIDISettingsContent: View {
+    @EnvironmentObject var midiService: MIDIService
+    @EnvironmentObject var audioEngine: AudioEngine
+    @AppStorage("midiEnabled") private var midiEnabled = true
+    @AppStorage("midiSendFeedback") private var midiSendFeedback = true
+    @State private var showMappingEditor = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Toggle("Enable MIDI control", isOn: $midiEnabled)
+            Toggle("Send feedback to controllers", isOn: $midiSendFeedback)
+            
+            Divider()
+            
+            Text("MIDI Mappings")
+                .font(.headline)
+            
+            Button("Configure Mappings...") {
+                showMappingEditor = true
+            }
+            .sheet(isPresented: $showMappingEditor) {
+                MIDIMappingEditorView()
+                    .environmentObject(midiService)
+                    .environmentObject(audioEngine)
+            }
+            
+            Spacer()
+        }
+        .padding(16)
+    }
+}
+
+struct AudioSettingsContent: View {
+    @EnvironmentObject var audioEngine: AudioEngine
+    @AppStorage("sampleRate") private var sampleRate = 44100
+    @AppStorage("bufferSize") private var bufferSize = 512
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Output Device")
+                .font(.headline)
+            
+            Picker("", selection: Binding(
+                get: { audioEngine.selectedOutputDevice?.id ?? "" },
+                set: { id in
+                    if let device = audioEngine.outputDevices.first(where: { $0.id == id }) {
+                        audioEngine.selectOutputDevice(device)
+                    }
+                }
+            )) {
+                ForEach(audioEngine.outputDevices) { device in
+                    Text(device.name).tag(device.id)
+                }
+            }
+            .labelsHidden()
+            
+            Divider()
+            
+            Text("Sample Rate")
+                .font(.headline)
+            Picker("", selection: $sampleRate) {
+                Text("44.1 kHz").tag(44100)
+                Text("48 kHz").tag(48000)
+                Text("96 kHz").tag(96000)
+            }
+            .pickerStyle(.segmented)
+            
+            Text("Buffer Size")
+                .font(.headline)
+            Picker("", selection: $bufferSize) {
+                Text("256").tag(256)
+                Text("512").tag(512)
+                Text("1024").tag(1024)
+            }
+            .pickerStyle(.segmented)
+            
+            Spacer()
+        }
+        .padding(16)
+    }
+}
+
+struct AboutSettingsContent: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "waveform.circle.fill")
+                .font(.system(size: 64))
+                .foregroundColor(.accentColor)
+            
+            Text("Manatee")
+                .font(.title)
+                .fontWeight(.bold)
+            
+            Text("Version 1.0.0")
+                .foregroundColor(.secondary)
+            
+            Text("Audio control for macOS")
+                .foregroundColor(.secondary)
+            
+            Divider()
+            
+            Text("© 2024 Manatee Audio")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            Spacer()
+        }
+        .padding(16)
     }
 }
 
@@ -259,6 +485,58 @@ struct AppVolumeRow: View {
         case .bus:
             return "arrow.triangle.branch"
         }
+    }
+}
+
+// MARK: - Mixer Settings Popover (for use in MixerView)
+
+struct MixerSettingsPopoverView: View {
+    @EnvironmentObject var audioEngine: AudioEngine
+    @EnvironmentObject var midiService: MIDIService
+    @State private var selectedTab: SettingsPopoverView.SettingsTab = .general
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("Settings")
+                    .font(.headline)
+            }
+            .padding(12)
+            
+            Divider()
+            
+            // Tab picker
+            Picker("", selection: $selectedTab) {
+                ForEach(SettingsPopoverView.SettingsTab.allCases, id: \.self) { tab in
+                    Text(tab.rawValue).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            
+            Divider()
+            
+            // Content
+            ScrollView {
+                switch selectedTab {
+                case .general:
+                    GeneralSettingsContent()
+                case .midi:
+                    MIDISettingsContent()
+                        .environmentObject(midiService)
+                case .audio:
+                    AudioSettingsContent()
+                        .environmentObject(audioEngine)
+                case .about:
+                    AboutSettingsContent()
+                }
+            }
+            .frame(maxHeight: 350)
+        }
+        .frame(width: 320)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 

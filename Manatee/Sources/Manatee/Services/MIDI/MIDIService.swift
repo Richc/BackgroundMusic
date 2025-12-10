@@ -303,6 +303,25 @@ final class MIDIService: ObservableObject {
         // This would send LED ring updates, etc. back to the controller
     }
     
+    // MARK: - Mapping Management
+    
+    func addMapping(_ mapping: MIDIMapping) {
+        mappings.append(mapping)
+        saveMappings()
+    }
+    
+    func removeMapping(_ mapping: MIDIMapping) {
+        mappings.removeAll { $0.id == mapping.id }
+        saveMappings()
+    }
+    
+    func updateMapping(_ mapping: MIDIMapping) {
+        if let index = mappings.firstIndex(where: { $0.id == mapping.id }) {
+            mappings[index] = mapping
+            saveMappings()
+        }
+    }
+    
     // MARK: - Persistence
     
     private func loadMappings() {
