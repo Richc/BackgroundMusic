@@ -431,6 +431,9 @@ struct GeneralSettingsContent: View {
         VStack(alignment: .leading, spacing: 16) {
             Toggle("Launch at login", isOn: $launchAtLogin)
             Toggle("Show in Dock", isOn: $showInDock)
+                .onChange(of: showInDock) { newValue in
+                    NSApp.setActivationPolicy(newValue ? .regular : .accessory)
+                }
             
             Divider()
             

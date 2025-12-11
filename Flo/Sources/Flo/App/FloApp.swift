@@ -12,6 +12,15 @@ import AppKit
 @main
 struct FloApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @AppStorage("colorScheme") private var colorScheme: String = "system"
+    
+    private var preferredColorScheme: ColorScheme? {
+        switch colorScheme {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil  // System default
+        }
+    }
     
     var body: some Scene {
         // Mixer window (can be opened from menu bar)
@@ -22,6 +31,7 @@ struct FloApp: App {
                 .environmentObject(appDelegate.oscService)
                 .environmentObject(appDelegate.presetStore)
                 .frame(minWidth: 500, minHeight: 550)
+                .preferredColorScheme(preferredColorScheme)
         }
         .defaultSize(width: 1200, height: 600)
         
@@ -31,6 +41,7 @@ struct FloApp: App {
                 .environmentObject(appDelegate.audioEngine)
                 .environmentObject(appDelegate.midiService)
                 .environmentObject(appDelegate.oscService)
+                .preferredColorScheme(preferredColorScheme)
         }
         
         // Menu bar item
@@ -38,6 +49,7 @@ struct FloApp: App {
             MenuBarPopoverView()
                 .environmentObject(appDelegate.audioEngine)
                 .environmentObject(appDelegate.midiService)
+                .preferredColorScheme(preferredColorScheme)
         } label: {
             MenuBarIconView()
         }
@@ -61,6 +73,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
             print("🐋 Flo v1.0.0 starting...")
+            
+            // Apply dock visibility setting
+            let showInDock = UserDefaults.standard.bool(forKey: "showInDock")
+            NSApp.setActivationPolicy(showInDock ? .regular : .accessory)
             
             // Initialize audio engine
             await audioEngine.initialize()

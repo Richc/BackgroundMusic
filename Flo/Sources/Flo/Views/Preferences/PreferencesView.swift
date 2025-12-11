@@ -132,6 +132,9 @@ struct GeneralPreferencesView: View {
                 Toggle("Launch Flo at login", isOn: $launchAtLogin)
                 Toggle("Show in menu bar", isOn: $showInMenuBar)
                 Toggle("Show in Dock", isOn: $showInDock)
+                    .onChange(of: showInDock) { newValue in
+                        NSApp.setActivationPolicy(newValue ? .regular : .accessory)
+                    }
             }
             
             Divider()

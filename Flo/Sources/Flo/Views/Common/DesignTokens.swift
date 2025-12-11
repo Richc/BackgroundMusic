@@ -19,25 +19,95 @@ enum FloColors {
     /// Secondary accent
     static let accent = Color.accentColor
     
-    // MARK: - Channel Strip Colors
+    // MARK: - Light Mode Gradient Palette (Purple → Magenta → Red → Orange → Yellow)
     
-    /// Background of a channel strip (slightly lighter than window background)
-    static let channelBackground = Color(white: 0.18)
+    /// Light mode channel colors - vibrant gradient palette
+    static let lightModeChannelColors: [Color] = [
+        Color(hue: 0.80, saturation: 0.70, brightness: 0.85),  // Purple
+        Color(hue: 0.90, saturation: 0.65, brightness: 0.85),  // Magenta
+        Color(hue: 0.95, saturation: 0.65, brightness: 0.85),  // Pink-Red
+        Color(hue: 0.02, saturation: 0.70, brightness: 0.90),  // Red-Orange
+        Color(hue: 0.06, saturation: 0.75, brightness: 0.92),  // Orange
+        Color(hue: 0.10, saturation: 0.70, brightness: 0.92),  // Orange-Yellow
+        Color(hue: 0.13, saturation: 0.65, brightness: 0.92),  // Yellow
+    ]
+    
+    /// Get a channel color based on index (for light mode)
+    static func channelColor(at index: Int) -> Color {
+        lightModeChannelColors[index % lightModeChannelColors.count]
+    }
+    
+    // MARK: - Channel Strip Colors (Adaptive for Light/Dark mode)
+    
+    /// Background of a channel strip - adapts to light/dark mode
+    static var channelBackground: Color {
+        Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(white: 0.18, alpha: 1.0)
+            } else {
+                // Light mode uses a warm off-white that complements the vibrant palette
+                return NSColor(hue: 0.08, saturation: 0.05, brightness: 0.97, alpha: 1.0)
+            }
+        }))
+    }
     
     /// Elevated channel strip (selected) - blue tint
-    static let channelBackgroundSelected = Color(hue: 0.58, saturation: 0.5, brightness: 0.4)
+    static var channelBackgroundSelected: Color {
+        Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(hue: 0.58, saturation: 0.5, brightness: 0.4, alpha: 1.0)
+            } else {
+                return NSColor(hue: 0.58, saturation: 0.3, brightness: 0.85, alpha: 1.0)
+            }
+        }))
+    }
     
-    /// Channel strip when inactive/grayed out - darker
-    static let channelBackgroundInactive = Color(white: 0.12)
+    /// Channel strip when inactive/grayed out
+    static var channelBackgroundInactive: Color {
+        Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(white: 0.12, alpha: 1.0)
+            } else {
+                return NSColor(white: 0.85, alpha: 1.0)
+            }
+        }))
+    }
     
     /// Fader track background
-    static let faderTrack = Color(white: 0.15)
+    static var faderTrack: Color {
+        Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(white: 0.15, alpha: 1.0)
+            } else {
+                // Warm track color for light mode
+                return NSColor(white: 0.4, alpha: 1.0)
+            }
+        }))
+    }
     
     /// Fader cap/thumb
-    static let faderCap = Color(white: 0.75)
+    static var faderCap: Color {
+        Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(white: 0.75, alpha: 1.0)
+            } else {
+                // White cap for light mode - stands out on colored backgrounds
+                return NSColor.white
+            }
+        }))
+    }
     
     /// Fader cap when dragging
-    static let faderCapActive = Color.white
+    static var faderCapActive: Color {
+        Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor.white
+            } else {
+                // Bright white when active in light mode
+                return NSColor.white
+            }
+        }))
+    }
     
     // MARK: - Meter Colors
     
@@ -56,22 +126,46 @@ enum FloColors {
     /// Meter clip indicator
     static let meterClip = Color(hue: 0.0, saturation: 1.0, brightness: 1.0)
     
-    /// Meter background
-    static let meterBackground = Color(white: 0.1)
+    /// Meter background - adapts to light/dark mode
+    static var meterBackground: Color {
+        Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(white: 0.1, alpha: 1.0)
+            } else {
+                return NSColor(white: 0.8, alpha: 1.0)
+            }
+        }))
+    }
     
     // MARK: - Button States
     
     /// Mute button active
     static let muteActive = Color.green
     
-    /// Mute button inactive
-    static let muteInactive = Color(white: 0.3)
+    /// Mute button inactive - adapts to light/dark mode
+    static var muteInactive: Color {
+        Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(white: 0.3, alpha: 1.0)
+            } else {
+                return NSColor(white: 0.7, alpha: 1.0)
+            }
+        }))
+    }
     
     /// Solo button active
     static let soloActive = Color.yellow
     
-    /// Solo button inactive
-    static let soloInactive = Color(white: 0.3)
+    /// Solo button inactive - adapts to light/dark mode
+    static var soloInactive: Color {
+        Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(white: 0.3, alpha: 1.0)
+            } else {
+                return NSColor(white: 0.7, alpha: 1.0)
+            }
+        }))
+    }
     
     // MARK: - Semantic Colors
     
@@ -89,6 +183,42 @@ enum FloColors {
     
     /// Text tertiary
     static let textTertiary = Color(nsColor: .tertiaryLabelColor)
+    
+    /// Text on colored channel strip backgrounds (light mode uses vibrant colors)
+    static var channelTextPrimary: Color {
+        Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor.labelColor
+            } else {
+                // White text for light mode vibrant backgrounds
+                return NSColor.white
+            }
+        }))
+    }
+    
+    /// Secondary text on colored channel strip backgrounds
+    static var channelTextSecondary: Color {
+        Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor.secondaryLabelColor
+            } else {
+                // Slightly transparent white for secondary text
+                return NSColor(white: 1.0, alpha: 0.85)
+            }
+        }))
+    }
+    
+    /// Tertiary text on colored channel strip backgrounds
+    static var channelTextTertiary: Color {
+        Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor.tertiaryLabelColor
+            } else {
+                // More transparent white for tertiary text
+                return NSColor(white: 1.0, alpha: 0.7)
+            }
+        }))
+    }
     
     /// Divider
     static let divider = Color(nsColor: .separatorColor)
@@ -229,6 +359,8 @@ enum FloShadows {
 struct ChannelStripStyle: ViewModifier {
     var isSelected: Bool = false
     var isInactive: Bool = false
+    var channelIndex: Int = 0
+    @Environment(\.colorScheme) private var colorScheme
     
     func body(content: Content) -> some View {
         content
@@ -248,6 +380,9 @@ struct ChannelStripStyle: ViewModifier {
             return FloColors.channelBackgroundInactive
         } else if isSelected {
             return FloColors.channelBackgroundSelected
+        } else if colorScheme == .light {
+            // Use vibrant gradient colors in light mode
+            return FloColors.channelColor(at: channelIndex)
         } else {
             return FloColors.channelBackground
         }
@@ -419,8 +554,8 @@ struct Triangle: Shape {
 // MARK: - View Extensions
 
 extension View {
-    func channelStripStyle(isSelected: Bool = false, isInactive: Bool = false) -> some View {
-        modifier(ChannelStripStyle(isSelected: isSelected, isInactive: isInactive))
+    func channelStripStyle(isSelected: Bool = false, isInactive: Bool = false, channelIndex: Int = 0) -> some View {
+        modifier(ChannelStripStyle(isSelected: isSelected, isInactive: isInactive, channelIndex: channelIndex))
     }
     
     /// Shows a tooltip only when "Show Tooltips" is enabled in settings

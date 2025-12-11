@@ -42,10 +42,11 @@ struct MixerView: View {
                 // App channels
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 2) {
-                        ForEach(visibleChannels) { channel in
+                        ForEach(Array(visibleChannels.enumerated()), id: \.element.id) { index, channel in
                             ChannelStripView(
                                 channel: channel,
                                 isSelected: channel.id == selectedChannelID,
+                                channelIndex: index,
                                 onRemove: {
                                     if channel.channelType == .inputDevice {
                                         audioEngine.removeChannel(channel)
@@ -406,6 +407,7 @@ struct MixerView: View {
 struct ChannelStripView: View {
     @ObservedObject var channel: AudioChannel
     var isSelected: Bool = false
+    var channelIndex: Int = 0  // For light mode gradient colors
     var onRemove: (() -> Void)? = nil
     var availableTargets: [AudioChannel] = []  // Other channels that can receive audio
     var onRoutingChanged: ((AudioChannel, UUID, Int, Bool) -> Void)? = nil  // (source, targetId, inputCh, enabled)
@@ -444,7 +446,7 @@ struct ChannelStripView: View {
             // Volume display
             Text(channel.volumeDBFormatted)
                 .font(FloTypography.volumeValue)
-                .foregroundColor(isInactive ? FloColors.textTertiary : FloColors.textSecondary)
+                .foregroundColor(isInactive ? FloColors.channelTextTertiary : FloColors.channelTextSecondary)
             
             // Pan knob (double-click to center)
             KnobView(value: $channel.pan, range: -1...1, defaultValue: 0)
@@ -455,7 +457,7 @@ struct ChannelStripView: View {
             
             Text("Pan")
                 .font(.system(size: 8))
-                .foregroundColor(FloColors.textTertiary)
+                .foregroundColor(FloColors.channelTextTertiary)
             
             // Mute/Solo/Record buttons
             HStack(spacing: 4) {
@@ -477,7 +479,7 @@ struct ChannelStripView: View {
             .opacity(isInactive ? 0.5 : 1.0)
         }
         .padding(8)
-        .channelStripStyle(isSelected: isSelected, isInactive: isInactive)
+        .channelStripStyle(isSelected: isSelected, isInactive: isInactive, channelIndex: channelIndex)
         .overlay(alignment: .topTrailing) {
             // Remove button on hover
             if onRemove != nil {
@@ -525,7 +527,7 @@ struct ChannelStripView: View {
                     } else {
                         Image(systemName: channel.channelType == .master ? "speaker.wave.3.fill" : "app.fill")
                             .font(.system(size: 20))
-                            .foregroundColor(isInactive ? FloColors.textTertiary : FloColors.textSecondary)
+                            .foregroundColor(isInactive ? FloColors.channelTextTertiary : FloColors.channelTextSecondary)
                     }
                     
                     // Inactive overlay badge
@@ -577,7 +579,7 @@ struct ChannelStripView: View {
             
             Text(channel.name)
                 .font(FloTypography.channelName)
-                .foregroundColor(isInactive ? FloColors.textTertiary : FloColors.textPrimary)
+                .foregroundColor(isInactive ? FloColors.channelTextTertiary : FloColors.channelTextPrimary)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
         }
