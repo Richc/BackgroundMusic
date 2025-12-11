@@ -13,42 +13,49 @@ struct MenuBarIconView: View {
     private var menuBarImage: NSImage? {
         // Try multiple locations for the icon
         
-        // Try 1: Load from Bundle.module (SPM resources)
-        if let iconURL = Bundle.module.url(forResource: "MenuBarIcon", withExtension: "png"),
+        // Try 1: Load "boom box.png" from Bundle.module (SPM resources)
+        if let iconURL = Bundle.module.url(forResource: "boom box", withExtension: "png"),
            let nsImage = NSImage(contentsOf: iconURL) {
-            print("✅ MenuBarIcon loaded from Bundle.module: \(iconURL)")
+            print("✅ boom box.png loaded from Bundle.module: \(iconURL)")
             return configureMenuBarImage(nsImage)
         }
         
         // Try 2: Load from main bundle Resources (installed .app)
-        if let iconURL = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png"),
+        if let iconURL = Bundle.main.url(forResource: "boom box", withExtension: "png"),
            let nsImage = NSImage(contentsOf: iconURL) {
-            print("✅ MenuBarIcon loaded from Bundle.main: \(iconURL)")
+            print("✅ boom box.png loaded from Bundle.main: \(iconURL)")
             return configureMenuBarImage(nsImage)
         }
         
         // Try 3: Load from executable's parent directory structure (.app bundle)
         let executableURL = Bundle.main.executableURL
         if let resourcesURL = executableURL?.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources") {
-            let iconURL = resourcesURL.appendingPathComponent("MenuBarIcon.png")
+            let iconURL = resourcesURL.appendingPathComponent("boom box.png")
             if FileManager.default.fileExists(atPath: iconURL.path),
                let nsImage = NSImage(contentsOf: iconURL) {
-                print("✅ MenuBarIcon loaded from Resources: \(iconURL)")
+                print("✅ boom box.png loaded from Resources: \(iconURL)")
                 return configureMenuBarImage(nsImage)
             }
         }
         
         // Try 4: Check inside Flo_Flo.bundle
         if let resourcesURL = Bundle.main.executableURL?.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/Flo_Flo.bundle") {
-            let iconURL = resourcesURL.appendingPathComponent("MenuBarIcon.png")
+            let iconURL = resourcesURL.appendingPathComponent("boom box.png")
             if FileManager.default.fileExists(atPath: iconURL.path),
                let nsImage = NSImage(contentsOf: iconURL) {
-                print("✅ MenuBarIcon loaded from Flo_Flo.bundle: \(iconURL)")
+                print("✅ boom box.png loaded from Flo_Flo.bundle: \(iconURL)")
                 return configureMenuBarImage(nsImage)
             }
         }
         
-        print("⚠️ MenuBarIcon not found in any location")
+        // Try 5: Fallback to MenuBarIcon.png
+        if let iconURL = Bundle.module.url(forResource: "MenuBarIcon", withExtension: "png"),
+           let nsImage = NSImage(contentsOf: iconURL) {
+            print("✅ MenuBarIcon loaded from Bundle.module: \(iconURL)")
+            return configureMenuBarImage(nsImage)
+        }
+        
+        print("⚠️ Menu bar icon not found in any location")
         print("   Bundle.main.bundlePath: \(Bundle.main.bundlePath)")
         print("   Bundle.main.resourcePath: \(Bundle.main.resourcePath ?? "nil")")
         print("   Bundle.module: \(Bundle.module.bundlePath)")
