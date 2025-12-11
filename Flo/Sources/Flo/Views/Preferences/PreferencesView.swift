@@ -169,8 +169,7 @@ struct AudioPreferencesView: View {
     @EnvironmentObject var audioEngine: AudioEngine
     
     @AppStorage("autoSwitchOutput") private var autoSwitchOutput = true
-    @AppStorage("meterRefreshRate") private var meterRefreshRate = 30.0
-    @AppStorage("bufferSize") private var bufferSize = 512
+    @AppStorage("sampleRate") private var sampleRate = 44100
     
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -187,28 +186,21 @@ struct AudioPreferencesView: View {
             
             Divider()
             
-            PreferencesSectionHeader(title: "Performance")
+            PreferencesSectionHeader(title: "Recording Sample Rate")
             
             HStack {
-                Text("Buffer Size:")
-                Picker("", selection: $bufferSize) {
-                    Text("128 samples").tag(128)
-                    Text("256 samples").tag(256)
-                    Text("512 samples").tag(512)
-                    Text("1024 samples").tag(1024)
+                Text("Sample Rate:")
+                Picker("", selection: $sampleRate) {
+                    Text("44.1 kHz (CD Quality)").tag(44100)
+                    Text("48 kHz (Video Standard)").tag(48000)
+                    Text("96 kHz (High Quality)").tag(96000)
                 }
-                .frame(width: 150)
+                .frame(width: 200)
             }
             
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("Meter Refresh Rate:")
-                    Text("\(Int(meterRefreshRate)) fps")
-                        .foregroundColor(.secondary)
-                }
-                Slider(value: $meterRefreshRate, in: 10...60, step: 5)
-                    .frame(width: 200)
-            }
+            Text("Higher sample rates produce better quality but larger files.")
+                .font(.caption)
+                .foregroundColor(.secondary)
             
             Divider()
             

@@ -524,7 +524,6 @@ struct MIDISettingsContent: View {
 struct AudioSettingsContent: View {
     @EnvironmentObject var audioEngine: AudioEngine
     @AppStorage("sampleRate") private var sampleRate = 44100
-    @AppStorage("bufferSize") private var bufferSize = 512
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -547,7 +546,7 @@ struct AudioSettingsContent: View {
             
             Divider()
             
-            Text("Sample Rate")
+            Text("Recording Sample Rate")
                 .font(.headline)
             Picker("", selection: $sampleRate) {
                 Text("44.1 kHz").tag(44100)
@@ -556,14 +555,9 @@ struct AudioSettingsContent: View {
             }
             .pickerStyle(.segmented)
             
-            Text("Buffer Size")
-                .font(.headline)
-            Picker("", selection: $bufferSize) {
-                Text("256").tag(256)
-                Text("512").tag(512)
-                Text("1024").tag(1024)
-            }
-            .pickerStyle(.segmented)
+            Text("Used when recording audio")
+                .font(.caption)
+                .foregroundColor(.secondary)
             
             Spacer()
         }

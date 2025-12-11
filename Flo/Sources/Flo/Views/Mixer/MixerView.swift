@@ -14,6 +14,7 @@ struct MixerView: View {
     @EnvironmentObject var presetStore: PresetStore
     @ObservedObject var crossfaderStore = CrossfaderStore.shared
     @StateObject private var audioRecorder = AudioRecorder.shared
+    @AppStorage("sampleRate") private var sampleRate = 44100
     
     @State private var selectedChannelID: UUID?
     @State private var showingPreferences = false
@@ -207,10 +208,10 @@ struct MixerView: View {
             do {
                 // Create the full file path for master recording
                 let fullPath = recordingPath.appendingPathComponent("\(finalFileName).wav")
-                try RecordingContext.shared.startMasterRecording(sampleRate: 44100, savePath: fullPath)
+                try RecordingContext.shared.startMasterRecording(sampleRate: Double(sampleRate), savePath: fullPath)
                 channel.isRecording = true
                 channel.recordingStartTime = Date()
-                print("🔴 Started master recording: \(finalFileName) at \(fullPath.path)")
+                print("🔴 Started master recording: \(finalFileName) at \(fullPath.path) (\(sampleRate) Hz)")
             } catch {
                 print("❌ Failed to start master recording: \(error.localizedDescription)")
             }
@@ -220,7 +221,7 @@ struct MixerView: View {
                 try audioRecorder.startRecording(
                     channelId: channel.id,
                     channelName: finalFileName,
-                    sampleRate: 44100,
+                    sampleRate: Double(sampleRate),
                     savePath: recordingPath
                 )
                 channel.isRecording = true
