@@ -62,7 +62,6 @@ final class AudioEngine: ObservableObject {
     private var appMonitorTimer: Timer?
     private var meterUpdateTimer: Timer?
     private let bgmBridge = BGMDeviceBridge.shared
-    private var cancellables = Set<AnyCancellable>()
     
     // MARK: - Initialization
     
@@ -136,9 +135,6 @@ final class AudioEngine: ObservableObject {
         // Set up BGMDevice volume listener (for keyboard volume keys)
         if isBGMDriverAvailable {
             setupBGMVolumeListener()
-            
-            // Subscribe to app volumes changes to mute unmanaged apps
-            setupUnmanagedAppMuting()
         }
         
         // Start monitoring running applications
@@ -176,9 +172,6 @@ final class AudioEngine: ObservableObject {
         
         // Remove BGM volume listener
         removeBGMVolumeListener()
-        
-        // Cancel subscriptions
-        cancellables.removeAll()
         
         channels.removeAll()
         
@@ -325,51 +318,6 @@ final class AudioEngine: ObservableObject {
         bgmVolumeListenerBlock = nil
     }
     
-    // MARK: - Unmanaged App Muting
-    
-    /// Set up subscription to mute any app that plays audio but isn't managed
-    private func setupUnmanagedAppMuting() {
-        // Subscribe to changes in app volumes from the BGM driver
-        bgmBridge.$appVolumes
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.muteUnmanagedApps()
-            }
-            .store(in: &cancellables)
-        
-        // Also mute unmanaged apps immediately on setup
-        muteUnmanagedApps()
-        
-        print("🔇 AudioEngine: Set up unmanaged app muting")
-    }
-    
-    /// Mute any app playing audio that isn't in the managed apps list
-    private func muteUnmanagedApps() {
-        guard isBGMDriverAvailable else { return }
-        
-        let managedBundleIDs = Set(appStore.managedApps.map { $0.bundleID })
-        let appVolumes = bgmBridge.appVolumes
-        
-        for (key, volumeData) in appVolumes {
-            // Skip pid-only entries
-            guard !key.starts(with: "pid:") else { continue }
-            
-            let bundleID = key
-            
-            // Check if this app is managed
-            if !managedBundleIDs.contains(bundleID) {
-                // Check if volume is not already 0
-                if volumeData.normalizedVolume > 0 {
-                    // Mute this unmanaged app
-                    if let pid = volumeData.processID {
-                        print("🔇 Muting unmanaged app: \(bundleID) (pid: \(pid))")
-                        bgmBridge.setVolume(0, forBundleID: bundleID, pid: pid)
-                    }
-                }
-            }
-        }
-    }
-    
     private func syncBGMDeviceVolume() {
         guard bgmBridge.isAvailable else { return }
         
@@ -483,11 +431,11 @@ final class AudioEngine: ObservableObject {
             self?.setAppEQ(bundleID: bundleID, lowDB: lowDB, midDB: midDB, highDB: highDB)
         }
         
-        // For newly managed apps, start with full volume (1.0)
-        // Don't read from driver since we muted unmanaged apps to 0
-        // The channel's default volume of 1.0 is correct
-        // Only sync pan from driver (pan isn't affected by muting)
+        // Try to get current volume from driver
         if isBGMDriverAvailable {
+            if let driverVolume = bgmBridge.getVolume(forBundleID: bundleID) {
+                channel.volume = driverVolume
+            }
             if let driverPan = bgmBridge.getPan(forBundleID: bundleID) {
                 channel.pan = driverPan
             }
@@ -508,62 +456,18 @@ final class AudioEngine: ObservableObject {
     func addManagedApp(_ app: ManagedApp) {
         appStore.addApp(app)
         updateManagedAppChannels()
-        
-        // Unmute the newly added app by restoring its volume to 1.0
-        unmuteApp(bundleID: app.bundleID)
     }
     
     /// Add an app from a running application
     func addManagedApp(from runningApp: NSRunningApplication) {
-        guard let bundleID = runningApp.bundleIdentifier else { return }
-        
         appStore.addApp(from: runningApp)
         updateManagedAppChannels()
-        
-        // Unmute the newly added app by restoring its volume to 1.0
-        unmuteApp(bundleID: bundleID)
-    }
-    
-    /// Restore an app's volume when it becomes managed
-    private func unmuteApp(bundleID: String) {
-        guard isBGMDriverAvailable else { return }
-        
-        if let runningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
-            let pid = runningApp.processIdentifier
-            print("🔊 Unmuting newly managed app: \(bundleID) (pid: \(pid))")
-            bgmBridge.setVolume(1.0, forBundleID: bundleID, pid: pid)
-        }
     }
     
     /// Remove an app from the managed list
     func removeManagedApp(bundleID: String) {
-        // First, mute the app and remove any routes before removing from managed list
-        if isBGMDriverAvailable {
-            if let runningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
-                let pid = runningApp.processIdentifier
-                print("🔇 Muting removed app: \(bundleID) (pid: \(pid))")
-                bgmBridge.setVolume(0, forBundleID: bundleID, pid: pid)
-                
-                // Remove any routes involving this app
-                removeRoutesForApp(pid: pid)
-            }
-        }
-        
         appStore.removeApp(bundleID: bundleID)
         updateManagedAppChannels()
-    }
-    
-    /// Remove all routes where this app is source or destination
-    private func removeRoutesForApp(pid: pid_t) {
-        // Get all managed apps to remove routes to/from the removed app
-        for channel in channels where channel.channelType == .application {
-            if channel.processId > 0 {
-                // Remove route from removed app to this channel
-                bgmBridge.removeRoute(sourcePID: pid, destPID: channel.processId)
-                // Remove route from this channel to removed app
-                bgmBridge.removeRoute(sourcePID: channel.processId, destPID: pid)
-            }
-        }
     }
     
     /// Get available apps to add (running apps not yet managed)
